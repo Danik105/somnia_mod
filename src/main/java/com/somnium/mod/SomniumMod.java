@@ -131,7 +131,26 @@ public final class SomniumMod implements ModInitializer {
             return true; // разрешаем разрушение
         });
 
-        // 21. ДОБАВЛЕНО (мультиплеер, колокол): удар в колокол будит спящих игроков в радиусе 5 блоков
+        // 21. ДОБАВЛЕНО (сон "Кровавый пир", поджог без пиксель-хантинга): зажигалка в одной
+        // руке + блюдо в другой (или брошенное блюдо рядом) + ПКМ куда угодно = сжечь блюдо.
+        // Регистрируем и UseBlock (ПКМ по блоку), и UseItem (ПКМ в воздух) — ловим оба случая.
+        net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
+            if (player instanceof net.minecraft.server.network.ServerPlayerEntity serverPlayer) {
+                return com.somnium.mod.dream.DreamManager.onFeastLighterUse(serverPlayer);
+            }
+            return net.minecraft.util.ActionResult.PASS;
+        });
+        net.fabricmc.fabric.api.event.player.UseItemCallback.EVENT.register((player, world, hand) -> {
+            if (player instanceof net.minecraft.server.network.ServerPlayerEntity serverPlayer) {
+                var result = com.somnium.mod.dream.DreamManager.onFeastLighterUse(serverPlayer);
+                if (result == net.minecraft.util.ActionResult.SUCCESS) {
+                    return net.minecraft.util.TypedActionResult.success(player.getStackInHand(hand));
+                }
+            }
+            return net.minecraft.util.TypedActionResult.pass(player.getStackInHand(hand));
+        });
+
+        // 22. ДОБАВЛЕНО (мультиплеер, колокол): удар в колокол будит спящих игроков в радиусе 5 блоков
         net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
             if (!(world instanceof net.minecraft.server.world.ServerWorld serverWorld)) {
                 return net.minecraft.util.ActionResult.PASS;

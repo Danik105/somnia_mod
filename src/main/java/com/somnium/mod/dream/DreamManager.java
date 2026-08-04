@@ -3428,7 +3428,7 @@ public final class DreamManager {
                     FEAST_DISH_TAKEN.put(sessionKey, true);
                     dishTaken = true;
                     player.sendMessage(net.minecraft.text.Text.literal(
-                            "§7Блюдо у тебя. Свежее — съешь (зажми ПКМ). Порченое (зелёное) — брось (Q) и сожги зажигалкой (ПКМ)."), true);
+                            "§7Блюдо у тебя. Свежее — съешь (зажми ПКМ). Порченое (зелёное) — в левую руку, зажигалку в правую, ПКМ — и оно сгорит."), true);
                 }
 
                 // Тронутое блюдо на столе дымится зелёным — внимательный игрок заметит
@@ -3578,7 +3578,7 @@ public final class DreamManager {
                     .getPlayer(sessionKey);
             if (player != null) {
                 player.sendMessage(net.minecraft.text.Text.literal(
-                        "§6Первое блюдо. Возьми и отведай — а если оно тронуто (зелёный дым), сожги Зажигалкой (ПКМ)."),
+                        "§6Первое блюдо. Свежее — съешь. Порченое (зелёное имя и дым) — возьми в левую руку, зажигалку в правую, ПКМ — сожги."),
                         true);
             }
         }
@@ -3645,7 +3645,7 @@ public final class DreamManager {
         UUID dishUuid = FEAST_DISH_ITEM.get(sessionKey);
         if (dishUuid != null && dishUuid.equals(entity.getUuid())) {
             boolean tainted = FEAST_DISH_TAINTED.getOrDefault(sessionKey, false);
-            if (isFeastLighter(player.getStackInHand(hand)) || isFeastLighter(player.getMainHandStack())) {
+            if (isFeastLighter(player.getMainHandStack()) || isFeastLighter(player.getOffHandStack())) {
                 burnDish(player, world, sessionKey, entity, tainted, now);
             } else {
                 entity.discard();
@@ -3657,7 +3657,7 @@ public final class DreamManager {
 
         // ПКМ зажигалкой по БРОШЕННОМУ блюду (лежит на полу) — сжечь на месте
         if (entity instanceof ItemEntity itemEntity && isFeastDish(itemEntity.getStack())) {
-            if (isFeastLighter(player.getStackInHand(hand)) || isFeastLighter(player.getMainHandStack())) {
+            if (isFeastLighter(player.getMainHandStack()) || isFeastLighter(player.getOffHandStack())) {
                 burnDish(player, world, sessionKey, entity, isTaintedDish(itemEntity.getStack()), now);
                 return net.minecraft.util.ActionResult.SUCCESS;
             }
@@ -3678,6 +3678,98 @@ public final class DreamManager {
         }
 
         return net.minecraft.util.ActionResult.PASS;
+    }
+
+    /**
+     * ДОБАВЛЕНО ("не регистрирует, что я сжигаю плохую еду"): поджог БЕЗ попадания ПКМ
+     * по крошечному летающему предмету. Вызывается из UseItemCallback/UseBlockCallback.
+     *  - зажигалка в одной руке + блюдо в другой → блюдо вспыхивает прямо в руке;
+     *  - зажигалка в руке + брошенное блюдо в радиусе 4 блоков → поджигается ближайшее.
+     */
+    public static net.minecraft.util.ActionResult onFeastLighterUse(ServerPlayerEntity player) {
+        ActiveDream active = ACTIVE.get(player.getUuid());
+        if (active == null || !active.dreamId().equals(SomniumMod.id("crimson_feast"))) {
+            return net.minecraft.util.ActionResult.PASS;
+        }
+        if (!(player.getEntityWorld() instanceof ServerWorld world)) {
+            return net.minecraft.util.ActionResult.PASS;
+        }
+        UUID sessionKey = sessionKey(player.getUuid());
+        long now = world.getServer().getTicks();
+
+        ItemStack main = player.getMainHandStack();
+        ItemStack off = player.getOffHandStack();
+        boolean lighterMain = isFeastLighter(main);
+        boolean lighterOff = isFeastLighter(off);
+
+        // 1) Блюдо + зажигалка в разных руках — сжечь блюдо в руке
+        if (lighterMain && isFeastDish(off)) {
+            burnHeldDish(player, world, sessionKey, net.minecraft.util.Hand.OFF_HAND,
+                    isTaintedDish(off), now);
+            return net.minecraft.util.ActionResult.SUCCESS;
+        }
+        if (lighterOff && isFeastDish(main)) {
+            burnHeldDish(player, world, sessionKey, net.minecraft.util.Hand.MAIN_HAND,
+                    isTaintedDish(main), now);
+            return net.minecraft.util.ActionResult.SUCCESS;
+        }
+
+        // 2) Зажигалка в руке + брошенное блюдо рядом — поджечь ближайшее
+        if (lighterMain || lighterOff) {
+            ItemEntity nearest = null;
+            double best = Double.MAX_VALUE;
+            for (ItemEntity e : world.getEntitiesByClass(ItemEntity.class,
+                    player.getBoundingBox().expand(4.0),
+                    e -> isFeastDish(e.getStack()))) {
+                double d = e.squaredDistanceTo(player);
+                if (d < best) {
+                    best = d;
+                    nearest = e;
+                }
+            }
+            if (nearest != null) {
+                burnDish(player, world, sessionKey, nearest,
+                        isTaintedDish(nearest.getStack()), now);
+                return net.minecraft.util.ActionResult.SUCCESS;
+            }
+        }
+        return net.minecraft.util.ActionResult.PASS;
+    }
+
+    /** Блюдо сгорает прямо в руке игрока: вспышка, пепел и реакция судей. */
+    private static void burnHeldDish(ServerPlayerEntity player, ServerWorld world, UUID sessionKey,
+                                     net.minecraft.util.Hand dishHand, boolean tainted, long now) {
+        player.getStackInHand(dishHand).decrement(1);
+        world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                net.minecraft.sound.SoundEvents.ITEM_FLINTANDSTEEL_USE,
+                net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 1.0f);
+        world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                net.minecraft.sound.SoundEvents.BLOCK_FIRE_AMBIENT,
+                net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
+        world.spawnParticles(net.minecraft.particle.ParticleTypes.FLAME,
+                player.getX(), player.getY() + 1.2, player.getZ(),
+                25, 0.3, 0.4, 0.3, 0.02);
+        world.spawnParticles(net.minecraft.particle.ParticleTypes.LARGE_SMOKE,
+                player.getX(), player.getY() + 1.4, player.getZ(),
+                10, 0.2, 0.3, 0.2, 0.01);
+        // Засчитываем курс, только если блюдо действительно ждало решения
+        if (FEAST_DISH_ITEM.containsKey(sessionKey)
+                || FEAST_DISH_TAKEN.getOrDefault(sessionKey, false)) {
+            finishCourse(sessionKey, now);
+        }
+        if (tainted) {
+            SanityManager.get(player).addSanity(FEAST_BURN_TAINTED_SANITY);
+            player.sendMessage(net.minecraft.text.Text.literal(
+                    "§6Порченое блюдо вспыхивает прямо в руке. Судьи одобрительно склоняют головы."), true);
+            judgesReact(world, sessionKey, FeastReaction.APPROVE, player.getBlockPos());
+        } else {
+            SanityManager.get(player).addSanity(FEAST_BURN_FRESH_SANITY);
+            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                    net.minecraft.entity.effect.StatusEffects.HUNGER, 300, 0));
+            player.sendMessage(net.minecraft.text.Text.literal(
+                    "§7Ты сжёг свежее блюдо. Судьи недовольно шипят."), true);
+            judgesReact(world, sessionKey, FeastReaction.ANGRY, player.getBlockPos());
+        }
     }
 
     /** Игрок съел блюдо (подобрал или ПКМ рукой): свежее — награда, тронутое — яд и смех. */
@@ -3843,7 +3935,7 @@ public final class DreamManager {
         player.giveItemStack(createFeastLighter());
         if (FEAST_LIGHTER_GIVEN.add(player.getUuid())) {
             player.sendMessage(net.minecraft.text.Text.literal(
-                    "§6Судьи вручают тебе Зажигалку. Тронутые блюда (дымятся зелёным) — сжигай ею: ПКМ по блюду."),
+                    "§6Судьи вручают тебе Зажигалку. Порченое блюдо (зелёное имя и дым) — возьми его в ЛЕВУЮ руку, зажигалку в правую и нажми ПКМ — блюдо сгорит."),
                     false);
         }
     }
