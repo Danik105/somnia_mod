@@ -1,9 +1,0 @@
-{
-  "display_name_key": "somnium.dream.shadow_forest",
-  "structure_template": "somnium:shadow_forest_procedural",
-  "monster_entity_ids": ["somnium:lurking_shade"],
-  "base_weight": 20,
-  "min_sanity_to_appear": 100,
-  "duration_ticks": 7200,
-  "objective": "Дойти до Дерева-Маяка, ни разу не обернувшись на шёпот за спиной."
-}

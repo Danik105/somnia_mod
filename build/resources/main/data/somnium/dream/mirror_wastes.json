@@ -1,9 +1,0 @@
-{
-  "display_name_key": "somnium.dream.mirror_wastes",
-  "structure_template": "somnium:mirror_wastes_procedural",
-  "monster_entity_ids": ["somnium:mirrored_double"],
-  "base_weight": 18,
-  "min_sanity_to_appear": 100,
-  "duration_ticks": 6600,
-  "objective": "Уничтожить своего Двойника, не разбив ни одного зеркала-осколка."
-}

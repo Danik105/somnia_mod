@@ -1,9 +1,0 @@
-{
-  "display_name_key": "somnium.dream.collapsing_mine",
-  "structure_template": "somnium:collapsing_mine_procedural",
-  "monster_entity_ids": ["somnium:screaming_miner", "somnium:blind_burrower"],
-  "base_weight": 18,
-  "min_sanity_to_appear": 100,
-  "duration_ticks": 6000,
-  "objective": "Добраться до дна шахты — путь назад обрушивается сам по себе."
-}
