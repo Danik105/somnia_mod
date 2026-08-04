@@ -117,6 +117,15 @@ public final class DreamManager {
     /** Поворот больше этого угла в окне соблазна = "обернулся на шёпот" */
     private static final float WHISPER_TURN_ANGLE = 110f;
 
+    // ДОБАВЛЕНО (сон "Лес теней", новый выход "Дерево-Маяк" вместо двери): прогресс "канала" —
+    // сколько тиков игрок непрерывно стоит в свете Дерева-Маяка. Ключ — playerId, как и у
+    // остальных трекеров этого сна (огни/шёпот тоже per-player).
+    private static final Map<UUID, Integer> BEACON_TREE_CHANNEL_TICKS = new HashMap<>();
+    /** Радиус света Дерева-Маяка, в котором идёт канал пробуждения */
+    private static final double BEACON_TREE_CHANNEL_RADIUS = 3.0;
+    /** Сколько тиков нужно простоять в свете дерева, чтобы оно забирало игрока из сна (5 сек) */
+    private static final int BEACON_TREE_CHANNEL_REQUIRED = 100;
+
     /**
      * Сколько тиков игрок лежит в кровати (уже "спит" по мнению ванильной игры — экран
      * плавно темнеет сам, это встроенный ванильный эффект isSleeping()), прежде чем его
@@ -691,6 +700,42 @@ public final class DreamManager {
     }
 
     /**
+     * ДОБАВЛЕНО (сон "Лес теней", новый выход): Дерево-Маяк — мёртвое дерево из тёмного дуба
+     * со светящимся "сердцем" и фонарями душ. Заменяет Дверь пробуждения только для этого сна:
+     * выход — не пройти сквозь объект, а ПРОСТОЯТЬ в свете дерева, пока идёт канал
+     * (см. tickShadowForest, BEACON_TREE_CHANNEL_*).
+     */
+    private static void buildBeaconTree(ServerWorld world, BlockPos pos) {
+        // Ствол из тёмного дуба, 5 блоков
+        for (int dy = 0; dy <= 4; dy++) {
+            world.setBlockState(pos.up(dy), net.minecraft.block.Blocks.DARK_OAK_LOG.getDefaultState());
+        }
+        // Светящееся "сердце" на вершине — маяк, видимый сквозь темноту леса издалека
+        world.setBlockState(pos.up(5), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
+        // Ветви на высоте 4 и подвесные фонари душ под их концами
+        BlockPos[] branches = { pos.add(1, 4, 0), pos.add(-1, 4, 0), pos.add(0, 4, 1), pos.add(0, 4, -1) };
+        for (BlockPos branch : branches) {
+            world.setBlockState(branch, net.minecraft.block.Blocks.DARK_OAK_LOG.getDefaultState());
+            world.setBlockState(branch.down(), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState()
+                    .with(net.minecraft.block.LanternBlock.HANGING, true));
+        }
+        // Кольцо фонарей душ у подножия — видимая граница "света дерева"
+        world.setBlockState(pos.add(2, 0, 2), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
+        world.setBlockState(pos.add(-2, 0, 2), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
+        world.setBlockState(pos.add(2, 0, -2), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
+        world.setBlockState(pos.add(-2, 0, -2), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
+
+        // Имя над деревом (невидимый стенд, как у двери) — видно издалека
+        ArmorStandEntity marker = new ArmorStandEntity(world, pos.getX() + 0.5, pos.getY() + 6.5, pos.getZ() + 0.5);
+        marker.setInvisible(true);
+        marker.setInvulnerable(true);
+        marker.setNoGravity(true);
+        marker.setCustomName(net.minecraft.text.Text.literal("§b§lДерево-Маяк"));
+        marker.setCustomNameVisible(true);
+        world.spawnEntity(marker);
+    }
+
+    /**
      * Точка цели REACH_DOOR — дальше от игрока, чем обычные монстры, чтобы до неё нужно было
      * дойти/добежать через локацию сна, а не оказаться рядом сразу же.
      */
@@ -967,6 +1012,53 @@ public final class DreamManager {
                 NEXT_GUIDE_LIGHT_TICK.put(uuid, now + GUIDE_LIGHT_INTERVAL);
             }
 
+            // 1.5) ДОБАВЛЕНО (новый выход "Дерево-Маяк" вместо двери): канал пробуждения.
+            // Стоишь в свете дерева — свет забирает тебя; вышел из света — канал затухает.
+            if (active.doorPos() != null) {
+                double distSq = player.squaredDistanceTo(
+                        active.doorPos().getX() + 0.5, player.getY(), active.doorPos().getZ() + 0.5);
+                if (distSq <= BEACON_TREE_CHANNEL_RADIUS * BEACON_TREE_CHANNEL_RADIUS) {
+                    int progress = BEACON_TREE_CHANNEL_TICKS.getOrDefault(uuid, 0) + 1;
+                    BEACON_TREE_CHANNEL_TICKS.put(uuid, progress);
+
+                    if (progress == 1) {
+                        player.sendMessage(net.minecraft.text.Text.literal(
+                                "§bОстанься в свете Дерева-Маяка — он забирает тебя из сна..."), true);
+                    } else if (progress % 25 == 0 && progress < BEACON_TREE_CHANNEL_REQUIRED) {
+                        player.sendMessage(net.minecraft.text.Text.literal(
+                                "§bСвет наполняет тебя... " + (progress * 100 / BEACON_TREE_CHANNEL_REQUIRED) + "%"), true);
+                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                                net.minecraft.sound.SoundEvents.BLOCK_AMETHYST_BLOCK_CHIME,
+                                net.minecraft.sound.SoundCategory.PLAYERS,
+                                1.0f, 0.8f + 0.4f * progress / BEACON_TREE_CHANNEL_REQUIRED);
+                    }
+                    // Души поднимаются вокруг игрока — видимый индикатор канала
+                    world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL,
+                            player.getX(), player.getY() + 0.5, player.getZ(),
+                            2, 0.3, 0.5, 0.3, 0.01);
+
+                    if (progress >= BEACON_TREE_CHANNEL_REQUIRED) {
+                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                                net.minecraft.sound.SoundEvents.BLOCK_BEACON_POWER_SELECT,
+                                net.minecraft.sound.SoundCategory.PLAYERS, 1.5f, 1.2f);
+                        BEACON_TREE_CHANNEL_TICKS.remove(uuid);
+                        wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
+                        continue;
+                    }
+                } else {
+                    // Вышел из света — канал затухает вдвое быстрее, чем накапливается
+                    Integer progress = BEACON_TREE_CHANNEL_TICKS.get(uuid);
+                    if (progress != null && progress > 0) {
+                        progress = Math.max(0, progress - 2);
+                        if (progress == 0) {
+                            BEACON_TREE_CHANNEL_TICKS.remove(uuid);
+                        } else {
+                            BEACON_TREE_CHANNEL_TICKS.put(uuid, progress);
+                        }
+                    }
+                }
+            }
+
             // 2) "Не оборачивайся на шёпот"
             Long whisperTick = LAST_WHISPER_TICK.get(uuid);
             Float whisperYaw = WHISPER_YAW.get(uuid);
@@ -1123,10 +1215,12 @@ public final class DreamManager {
         // ДОБАВЛЕНО (мультиплеер, видимость спящего партнёра): убираем "тело" из кровати
         removeSleepingBody(server, player.getUuid());
 
-        // ДОБАВЛЕНО (сон "Лес теней"): очищаем трекинг "не обернувшись" и ведьминых огней
+        // ДОБАВЛЕНО (сон "Лес теней"): очищаем трекинг "не обернувшись", ведьминых огней
+        // и канала Дерева-Маяка
         LAST_WHISPER_TICK.remove(player.getUuid());
         WHISPER_YAW.remove(player.getUuid());
         NEXT_GUIDE_LIGHT_TICK.remove(player.getUuid());
+        BEACON_TREE_CHANNEL_TICKS.remove(player.getUuid());
 
         // ДОБАВЛЕНО: очищаем трекер двери пробуждения
         WakeDoorTracker.onDreamEnd(player.getUuid());
@@ -2255,17 +2349,29 @@ public final class DreamManager {
                 } else {
                     // Это проход - добавляем освещение (факелы на стенах)
                     if (RANDOM.nextFloat() < 0.15f) {
-                        int worldX = gridX * cellSize + cellSize / 2;
-                        int worldZ = gridZ * cellSize + cellSize / 2;
+                        int centerX = gridX * cellSize + cellSize / 2;
+                        int centerZ = gridZ * cellSize + cellSize / 2;
 
-                        // Ищем ближайшую стену для факела
-                        for (int dx = -1; dx <= 1; dx++) {
-                            for (int dz = -1; dz <= 1; dz++) {
-                                if (dx == 0 && dz == 0) continue;
+                        // ИСПРАВЛЕНО ("факелы спавнятся в воздухе по центру"): раньше факел ставился
+                        // в ЦЕНТР прохода дефолтным состоянием WALL_TORCH без свойства FACING — то есть
+                        // без опоры он просто висел в воздухе (и рано или поздно "высыпался"). Теперь
+                        // факел ставится в блок прохода, вплотную примыкающий к стене, с корректным
+                        // FACING (направлен от стены в проход) и только к ортогональному соседу —
+                        // диагональная "стена" опорой для настенного факела быть не может.
+                        boolean torchPlaced = false;
+                        for (int dx = -1; dx <= 1 && !torchPlaced; dx++) {
+                            for (int dz = -1; dz <= 1 && !torchPlaced; dz++) {
+                                if ((dx == 0) == (dz == 0)) continue; // только ортогональные соседи
                                 if (maze.isWall(gridX + dx, gridZ + dz)) {
-                                    world.setBlockState(origin.add(worldX, 1, worldZ),
-                                        net.minecraft.block.Blocks.WALL_TORCH.getDefaultState());
-                                    break;
+                                    net.minecraft.util.math.Direction facing =
+                                            dx == 1 ? net.minecraft.util.math.Direction.WEST :
+                                            dx == -1 ? net.minecraft.util.math.Direction.EAST :
+                                            dz == 1 ? net.minecraft.util.math.Direction.NORTH :
+                                            net.minecraft.util.math.Direction.SOUTH;
+                                    world.setBlockState(origin.add(centerX + dx, 1, centerZ + dz),
+                                            net.minecraft.block.Blocks.WALL_TORCH.getDefaultState()
+                                                    .with(net.minecraft.block.WallTorchBlock.FACING, facing));
+                                    torchPlaced = true;
                                 }
                             }
                         }

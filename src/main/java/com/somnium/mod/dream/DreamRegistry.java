@@ -117,13 +117,13 @@ public final class DreamRegistry {
                 DreamObjectiveType.REACH_DOOR, null, 0
         ));
 
-        // ИЗМЕНЕНО: Лес теней - цель реализована: ведьмины огни ведут к двери, шёпот карает за оборот
+        // ИЗМЕНЕНО: Лес теней - ведьмины огни ведут к Дереву-Маяку; выход — канал в его свете
         list.add(new DreamType(
                 SomniumMod.id("shadow_forest"), "somnium.dream.shadow_forest",
                 "somnium:shadow_forest_procedural",
                 List.of(SomniumMod.id("lurking_shade")),
                 20, 100f, 7200L,
-                "Иди на ведьмины огни к Двери пробуждения. Шёпот зовёт обернуться — не смотри: тень ждёт твоего взгляда.",
+                "Иди на ведьмины огни к Дереву-Маяку и встань в его свет — дерево заберёт тебя из сна. Шёпот зовёт обернуться — не смотри: тень ждёт твоего взгляда.",
                 DreamObjectiveType.REACH_DOOR, null, 0
         ));
 
