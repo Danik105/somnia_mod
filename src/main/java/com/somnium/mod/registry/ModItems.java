@@ -38,6 +38,17 @@ public final class ModItems {
     public static final Item WAKING_BELL = register("waking_bell",
             settings -> new com.somnium.mod.item.WakingBellItem(settings.maxCount(4)));
 
+    // ДОБАВЛЕНО ("руда сноведений"): сырец из руды, слиток из плавки, меч из слитков.
+    // Руда и блок сноведений регистрируются как BlockItem в ModBlocks.
+    public static final Item RAW_DREAM = register("raw_dream",
+            settings -> new Item(settings.maxCount(64)));
+
+    public static final Item DREAM_INGOT = register("dream_ingot",
+            settings -> new Item(settings.maxCount(64)));
+
+    public static final Item DREAM_SWORD = register("dream_sword",
+            settings -> new com.somnium.mod.item.DreamSwordItem(settings.maxCount(1)));
+
     private static Item register(String path, java.util.function.Function<Item.Settings, Item> factory) {
         RegistryKey<Item> key = RegistryKey.of(RegistryKeys.ITEM, SomniumMod.id(path));
         return Registry.register(Registries.ITEM, key, factory.apply(new Item.Settings()));

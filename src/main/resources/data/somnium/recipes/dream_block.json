@@ -1,0 +1,16 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "DDD",
+    "DDD",
+    "DDD"
+  ],
+  "key": {
+    "D": {
+      "item": "somnium:dream_ingot"
+    }
+  },
+  "result": {
+    "item": "somnium:dream_block"
+  }
+}

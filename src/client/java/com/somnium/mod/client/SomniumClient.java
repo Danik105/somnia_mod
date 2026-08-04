@@ -66,6 +66,11 @@ public final class SomniumClient implements ClientModInitializer {
         EntityRendererRegistry.register(ModEntities.PHANTOM_EEL, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.STALKER, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.MIRROR_REFLECTION, MirrorReflectionRenderer::new);
+
+        // ДОБАВЛЕНО ("портал в мир снов"): плёнка портала полупрозрачная, как у портала ада
+        net.fabricmc.fabric.api.blockrenderlayer.v1.BlockRenderLayerMap.INSTANCE.putBlock(
+                com.somnium.mod.registry.ModBlocks.DREAM_PORTAL,
+                net.minecraft.client.render.RenderLayer.getTranslucent());
     }
 
     public static float getClientSanity() {

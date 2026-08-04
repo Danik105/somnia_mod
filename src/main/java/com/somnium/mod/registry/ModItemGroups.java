@@ -36,6 +36,12 @@ public final class ModItemGroups {
                 // из 2 существовавших предметов; теперь добавлены и оба новых.
                 entries.add(ModItems.NIGHTMARE_ESSENCE);
                 entries.add(ModItems.WAKING_BELL);
+                // ДОБАВЛЕНО ("руда сноведений"): руда, сырец, слиток, меч и блок-портал
+                entries.add(ModBlocks.DREAM_ORE);
+                entries.add(ModItems.RAW_DREAM);
+                entries.add(ModItems.DREAM_INGOT);
+                entries.add(ModItems.DREAM_SWORD);
+                entries.add(ModBlocks.DREAM_BLOCK);
             })
             .build();
 

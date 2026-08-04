@@ -1,0 +1,26 @@
+{
+  "type": "somnium:dream_portal_type",
+  "generator": {
+    "type": "minecraft:flat",
+    "settings": {
+      "biome": "minecraft:warped_forest",
+      "lakes": false,
+      "features": false,
+      "layers": [
+        {
+          "block": "minecraft:bedrock",
+          "height": 1
+        },
+        {
+          "block": "minecraft:blackstone",
+          "height": 3
+        },
+        {
+          "block": "minecraft:warped_nylium",
+          "height": 1
+        }
+      ],
+      "structure_overrides": []
+    }
+  }
+}

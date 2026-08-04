@@ -31,6 +31,8 @@ public final class ModDimensions {
     public static final RegistryKey<World> DREAM_WITHIN_DREAM = key("dream_within_dream");
     public static final RegistryKey<World> FALLING_PLANKS = key("dream_falling_planks");
     public static final RegistryKey<World> MIRROR_ROOM = key("dream_mirror_room");
+    // ДОБАВЛЕНО ("портал в мир снов"): свободное измерение за порталом из блоков сноведений
+    public static final RegistryKey<World> DREAM_PORTAL_WORLD = key("dream_portal_world");
 
     private static RegistryKey<World> key(String path) {
         return RegistryKey.of(RegistryKeys.WORLD, Identifier.of(SomniumMod.MOD_ID, path));
@@ -65,7 +67,8 @@ public final class ModDimensions {
                 || dimension.equals(VOID_OF_EYES)
                 || dimension.equals(DREAM_WITHIN_DREAM)
                 || dimension.equals(FALLING_PLANKS)
-                || dimension.equals(MIRROR_ROOM);
+                || dimension.equals(MIRROR_ROOM)
+                || dimension.equals(DREAM_PORTAL_WORLD);
     }
 
     /**
@@ -98,6 +101,7 @@ public final class ModDimensions {
         if (dimension.equals(DREAM_WITHIN_DREAM)) return 0 + 1 + 4;      // bedrock(1) + blackstone(4) = 5
         if (dimension.equals(FALLING_PLANKS)) return 64;                 // платформа в пустоте, Y=64
         if (dimension.equals(MIRROR_ROOM)) return 0 + 1 + 4;             // bedrock(1) + blackstone(4) = 5
+        if (dimension.equals(DREAM_PORTAL_WORLD)) return 0 + 1 + 3 + 1;  // bedrock(1) + blackstone(3) + warped_nylium(1) = 5
         return 64; // не должно случиться — неизвестное измерение сна, безопасный дефолт
     }
 }

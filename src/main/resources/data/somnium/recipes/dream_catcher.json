@@ -22,7 +22,7 @@
     }
   ],
   "result": {
-    "id": "somnium:dream_catcher",
-    "count": 1
+    "count": 1,
+    "item": "somnium:dream_catcher"
   }
 }

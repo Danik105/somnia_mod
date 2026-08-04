@@ -1,0 +1,10 @@
+{
+  "variants": {
+    "axis=x": {
+      "model": "somnium:block/dream_portal_ns"
+    },
+    "axis=z": {
+      "model": "somnium:block/dream_portal_ew"
+    }
+  }
+}

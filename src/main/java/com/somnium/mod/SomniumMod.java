@@ -41,6 +41,14 @@ public final class SomniumMod implements ModInitializer {
         ModEntities.register();
         ModEntities.registerAttributes();
         ModItems.register();
+        com.somnium.mod.registry.ModBlocks.register(); // руда/блок сноведений, портал
+
+        // ДОБАВЛЕНО ("руда как у меди"): жилы руды сноведений в обычном мире
+        net.fabricmc.fabric.api.biome.v1.BiomeModifications.addFeature(
+                net.fabricmc.fabric.api.biome.v1.BiomeSelectors.foundInOverworld(),
+                net.minecraft.world.gen.GenerationStep.Feature.UNDERGROUND_ORES,
+                net.minecraft.registry.RegistryKey.of(net.minecraft.registry.RegistryKeys.PLACED_FEATURE,
+                        id("dream_ore")));
         // ИСПРАВЛЕНО: раньше предметы регистрировались, но никогда не попадали ни в одну
         // вкладку творческого режима — вызов ниже добавлен, чтобы они стали видны игроку.
         com.somnium.mod.registry.ModItemGroups.register();
@@ -114,6 +122,30 @@ public final class SomniumMod implements ModInitializer {
         // 17.1 ДОБАВЛЕНО (сон "Пустошь зеркал", редизайн "Поймай своё отражение"):
         // убегающее зеркало (3 касания до выхода) и Двойник, идущий по следу игрока
         ServerTickEvents.END_SERVER_TICK.register(com.somnium.mod.dream.DreamManager::tickMirrorWastes);
+
+        // 17.2 ДОБАВЛЕНО (сон "Пустота с глазами"): глаза открываются во тьме,
+        // сердцебиение, Наблюдатели сжимают кольцо — "движ" с первых секунд
+        ServerTickEvents.END_SERVER_TICK.register(com.somnium.mod.dream.DreamManager::tickVoidOfEyes);
+
+        // 17.3 ДОБАВЛЕНО ("портал в мир снов"): стояние в портале 4 сек = телепорт
+        ServerTickEvents.END_SERVER_TICK.register(com.somnium.mod.dream.DreamManager::tickDreamPortal);
+
+        // 17.4 ДОБАВЛЕНО ("портал в мир снов"): поджог рамки из блоков сноведений
+        // зажигалкой — как рамка из обсидиана для ада. Ставим наш обработчик так, чтобы
+        // он срабатывал до ванильной постановки огня.
+        net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
+            if (!(world instanceof net.minecraft.server.world.ServerWorld serverWorld)) {
+                return net.minecraft.util.ActionResult.PASS;
+            }
+            if (player.getStackInHand(hand).getItem() != net.minecraft.item.Items.FLINT_AND_STEEL) {
+                return net.minecraft.util.ActionResult.PASS;
+            }
+            net.minecraft.util.math.BlockPos firePos = hitResult.getBlockPos().offset(hitResult.getSide());
+            if (com.somnium.mod.dream.DreamPortalHelper.tryIgnite(serverWorld, firePos)) {
+                return net.minecraft.util.ActionResult.SUCCESS;
+            }
+            return net.minecraft.util.ActionResult.PASS;
+        });
 
         // 18. ДОБАВЛЕНО (команда для тестирования): /testdream для быстрой телепортации в измерения снов
         CommandRegistrationCallback.EVENT.register(TestDreamCommand::register);

@@ -4,6 +4,14 @@
   "item.somnium.dream_catcher": "Ловец Снов",
   "item.somnium.nightmare_essence": "Эссенция Кошмара",
   "item.somnium.waking_bell": "Колокол Пробуждения",
+  "item.somnium.raw_dream": "Необработанный Сон",
+  "item.somnium.dream_ingot": "Слиток Сноведений",
+  "item.somnium.dream_sword": "Меч Сноведений",
+  "item.somnium.dream_sword.tooltip": "Раскрывает силу только во сне",
+
+  "block.somnium.dream_ore": "Руда Сноведений",
+  "block.somnium.dream_block": "Блок Сноведений",
+  "block.somnium.dream_portal": "Портал в Мир Снов",
 
   "entity.somnium.drowned_wretch": "Утопленник-переродок",
   "entity.somnium.phantom_eel": "Призрачный Угорь",
@@ -23,6 +31,8 @@
   "somnium.dream.crimson_feast": "Сон: Кровавый пир",
   "somnium.dream.void_of_eyes": "Сон: Пустота с глазами",
   "somnium.dream.dream_within_dream": "Сон: Сон-в-сне",
+  "somnium.dream.falling_planks": "Сон: Подъезд",
+  "somnium.dream.mirror_room": "Сон: Зеркальная комната",
 
   "somnium.dream.objective": "Цель сна: %s",
   "somnium.dream.wake": "Вы просыпаетесь...",

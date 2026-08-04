@@ -1,42 +1,25 @@
 {
   "itemGroup.somnium": "Somnium",
+  "block.somnium.dream_ore": "Dream Ore",
+  "block.somnium.dream_block": "Dream Block",
+  "block.somnium.dream_portal": "Dream Portal",
   "item.somnium.clarity_shard": "Clarity Shard",
   "item.somnium.dream_catcher": "Dream Catcher",
   "item.somnium.nightmare_essence": "Nightmare Essence",
   "item.somnium.waking_bell": "Waking Bell",
-
-  "entity.somnium.drowned_wretch": "Drowned Wretch",
-  "entity.somnium.phantom_eel": "Phantom Eel",
-  "entity.somnium.lurking_shade": "Lurking Shade",
-  "entity.somnium.mirrored_double": "Mirrored Double",
-  "entity.somnium.screaming_miner": "Screaming Miner",
-  "entity.somnium.blind_burrower": "Blind Burrower",
-  "entity.somnium.feral_villager": "Feral Villager",
-  "entity.somnium.flesh_golem": "Flesh Golem",
+  "item.somnium.raw_dream": "Raw Dream",
+  "item.somnium.dream_ingot": "Dream Ingot",
+  "item.somnium.dream_sword": "Dream Sword",
+  "item.somnium.dream_sword.tooltip": "Awakens to full power only inside a dream",
+  "entity.somnium.echo": "Echo",
   "entity.somnium.watcher": "Watcher",
-  "entity.somnium.nightmare_amalgam": "Nightmare",
-
-  "somnium.dream.drowning_city": "Dream: Drowning City",
-  "somnium.dream.shadow_forest": "Dream: Endless Shadow Forest",
-  "somnium.dream.mirror_wastes": "Dream: Mirror Wastes",
-  "somnium.dream.collapsing_mine": "Dream: Collapsing Mine",
-  "somnium.dream.crimson_feast": "Dream: Crimson Feast",
-  "somnium.dream.void_of_eyes": "Dream: Void of Eyes",
-  "somnium.dream.dream_within_dream": "Dream: A Dream Within a Dream",
-
-  "somnium.dream.objective": "Objective: %s",
-  "somnium.dream.wake": "You wake up...",
-  "somnium.dream.wake_door": "✦ Door of Awakening ✦",
-
-  "somnium.item.waking_bell.not_dreaming": "§7The bell stays silent while awake - it only works in a dream.",
-
-  "somnium.hud.sanity": "Sanity",
-
-  "somnium.warning.whispers": "§7You hear whispers... you should sleep.",
-  "somnium.warning.echoes": "§6The line between dream and reality thins.",
-  "somnium.warning.rupture": "§4§lYour sanity is failing!",
-  "somnium.warning.rupture_event": "§4§lReality tears around you!",
-
-  "advancements.somnium.first_dream.title": "First Dream",
-  "advancements.somnium.first_dream.description": "Enter the dream world for the first time"
+  "entity.somnium.mirrored_double": "Mirrored Double",
+  "somnium.dream.falling_planks": "Falling Planks",
+  "somnium.dream.crimson_feast": "Crimson Feast",
+  "somnium.dream.ashen_shore": "Ashen Shore",
+  "somnium.dream.mirror_wastes": "Mirror Wastes",
+  "somnium.dream.mirror_room": "Mirror Room",
+  "somnium.dream.void_of_eyes": "Void of Eyes",
+  "somnium.dream.drowning_city": "Drowning City",
+  "somnium.dream.dream_within_dream": "Dream Within a Dream"
 }

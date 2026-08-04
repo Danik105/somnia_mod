@@ -1,0 +1,19 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "pattern": [
+    "D",
+    "D",
+    "S"
+  ],
+  "key": {
+    "D": {
+      "item": "somnium:dream_ingot"
+    },
+    "S": {
+      "item": "minecraft:stick"
+    }
+  },
+  "result": {
+    "item": "somnium:dream_sword"
+  }
+}

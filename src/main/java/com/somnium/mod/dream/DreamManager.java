@@ -1289,6 +1289,9 @@ public final class DreamManager {
             clearMirrorWastesData(mwWorld, dreamStateKey);
         }
 
+        // ДОБАВЛЕНО (сон "Пустота с глазами"): трекинг "движа в начале"
+        VOE_START_TICK.remove(dreamStateKey);
+
         // ДОБАВЛЕНО (сон "Сон-в-сне"): очищаем данные о погоде при пробуждении
         DREAM_WITHIN_DREAM_ORIGINAL_POS.remove(player.getUuid());
         DREAM_WITHIN_DREAM_CHUNKS.remove(player.getUuid());
@@ -1763,6 +1766,33 @@ public final class DreamManager {
     private static final float STAIR_FALL_SANITY = -4.0f;
     private static final float STAIR_ROTTEN_SANITY = -2.0f;
 
+    // ===== ДОБАВЛЕНО (фидбек): обвал ступеней ПРЯМО ПЕРЕД игроком =====
+    /** Фрагмент-марш, на котором игрок стоит сейчас (-1 вне марша) */
+    private static final Map<UUID, Integer> STAIR_LAST_FLIGHT_STAGE = new HashMap<>();
+    /** Очередной ряд, который трещит и вот-вот обрушится */
+    private static final Map<UUID, StairCrumble> STAIR_CRUMBLE_PENDING = new HashMap<>();
+    /** Тик, когда можно крошить следующий ряд */
+    private static final Map<UUID, Long> STAIR_NEXT_CRUMBLE_TICK = new HashMap<>();
+    /** Сломанные обвалом блоки -> что там было (для "заживления") */
+    private static final Map<UUID, Map<BlockPos, net.minecraft.block.BlockState>> STAIR_BROKEN = new HashMap<>();
+    /** Сломанные блоки -> тик восстановления */
+    private static final Map<UUID, Map<BlockPos, Long>> STAIR_BROKEN_RESTORE = new HashMap<>();
+    /** Сломанные блоки -> индекс фрагмента (не восстанавливать в уже обрушенных) */
+    private static final Map<UUID, Map<BlockPos, Integer>> STAIR_BROKEN_STAGE = new HashMap<>();
+    private record StairCrumble(List<BlockPos> positions, List<net.minecraft.block.BlockState> states,
+                                int stage, long breakTick) {}
+    /** Пауза после входа на марш перед началом обвала */
+    private static final int STAIR_CRUMBLE_START_DELAY = 15;
+    /** Ряд трещит 4 тика, потом падает; следующий ряд — через 6 тиков */
+    private static final int STAIR_CRUMBLE_WARN_TICKS = 4;
+    private static final int STAIR_CRUMBLE_ROW_INTERVAL = 6;
+    /** Сломанный ряд "заживает" обратно через 4.5 сек — марш можно пройти снова */
+    private static final int STAIR_CRUMBLE_RESTORE_TICKS = 90;
+
+    // ===== ДОБАВЛЕНО (сон "Пустота с глазами", фидбек "не хватает движа в начале") =====
+    /** Тик входа в сон (ленивая инициализация в tickVoidOfEyes) */
+    private static final Map<UUID, Long> VOE_START_TICK = new HashMap<>();
+
     // ===== ДОБАВЛЕНО (сон "Пустошь зеркал", редизайн "Поймай своё отражение") =====
     /** Тик входа в сон (ленивая инициализация в tickMirrorWastes) */
     private static final Map<UUID, Long> MW_START_TICK = new HashMap<>();
@@ -1786,6 +1816,12 @@ public final class DreamManager {
     private static final int MW_TOUCHES_NEEDED = 3;
     /** Рассудок за захват Двойником */
     private static final float MW_GRAB_SANITY = -12.0f;
+
+    // ===== ДОБАВЛЕНО ("портал в мир снов"): стояние в портале и точка возврата =====
+    /** Сколько тиков игрок стоит в портале снов (нужно 80, как в аду); отрицательное — пауза после телепорта */
+    private static final Map<UUID, Integer> DREAM_PORTAL_STAND = new HashMap<>();
+    /** Куда вернуть игрока в реальный мир (позиция перед входом в портал) */
+    private static final Map<UUID, BlockPos> DREAM_PORTAL_RETURN = new HashMap<>();
 
     /**
      * ДОБАВЛЕНО (сон "Лестница в никуда"): строит низ подъезда — мятные стены, уходящие
@@ -2083,10 +2119,93 @@ public final class DreamManager {
                 }
             }
 
-            // 3) Гнилые ступени: скрип-предупреждение и пролом под ногами
-            java.util.Set<BlockPos> rotten = STAIR_ROTTEN.get(sessionKey);
+            // 2.5) ОБВАЛ ПРЯМО ПЕРЕД ИГРОКОМ (фидбек "лестница ломалась передо мной и я падал"):
+            //      пока игрок на марше, ряды ступеней впереди по направлению подъёма
+            //      трещат и обрушаются волной. Сломанные блоки "заживают" через ~4.5 сек,
+            //      чтобы марш можно было пройти с новой попытки.
             BlockPos supportPos = net.minecraft.util.math.BlockPos.ofFloored(
                     player.getX(), player.getY() - 0.5, player.getZ());
+            int playerPart = playerStage % 4;
+            if (playerStage < STAIR_FINAL_STAGE && (playerPart == 1 || playerPart == 3)) {
+                if (STAIR_LAST_FLIGHT_STAGE.getOrDefault(sessionKey, -1) != playerStage) {
+                    STAIR_LAST_FLIGHT_STAGE.put(sessionKey, playerStage);
+                    STAIR_NEXT_CRUMBLE_TICK.put(sessionKey, now + STAIR_CRUMBLE_START_DELAY);
+                }
+                if (STAIR_CRUMBLE_PENDING.get(sessionKey) == null
+                        && now >= STAIR_NEXT_CRUMBLE_TICK.getOrDefault(sessionKey, now)) {
+                    StairCrumble next = pickCrumbleRow(world, center, sessionKey, playerStage, supportPos, now);
+                    if (next != null) {
+                        STAIR_CRUMBLE_PENDING.put(sessionKey, next);
+                        // Предупреждение: треск и крошка — беги или отступай
+                        for (int ci = 0; ci < next.positions().size(); ci++) {
+                            BlockPos cp = next.positions().get(ci);
+                            world.spawnParticles(new net.minecraft.particle.BlockStateParticleEffect(
+                                            net.minecraft.particle.ParticleTypes.BLOCK,
+                                            next.states().get(ci)),
+                                    cp.getX() + 0.5, cp.getY() + 1.0, cp.getZ() + 0.5,
+                                    4, 0.25, 0.15, 0.25, 0.02);
+                        }
+                        BlockPos first = next.positions().get(0);
+                        world.playSound(null, first, net.minecraft.sound.SoundEvents.BLOCK_STONE_HIT,
+                                net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.5f);
+                    } else {
+                        // Впереди уже всё обрушено — проверимся позже
+                        STAIR_NEXT_CRUMBLE_TICK.put(sessionKey, now + 10);
+                    }
+                }
+            } else {
+                STAIR_LAST_FLIGHT_STAGE.remove(sessionKey);
+            }
+            // Исполнение обвала: ряд падает (вместе с подступенками и перилами)
+            StairCrumble pending = STAIR_CRUMBLE_PENDING.get(sessionKey);
+            if (pending != null && now >= pending.breakTick()) {
+                STAIR_CRUMBLE_PENDING.remove(sessionKey);
+                Map<BlockPos, net.minecraft.block.BlockState> broken =
+                        STAIR_BROKEN.computeIfAbsent(sessionKey, k -> new HashMap<>());
+                Map<BlockPos, Long> restore =
+                        STAIR_BROKEN_RESTORE.computeIfAbsent(sessionKey, k -> new HashMap<>());
+                Map<BlockPos, Integer> brokenStage =
+                        STAIR_BROKEN_STAGE.computeIfAbsent(sessionKey, k -> new HashMap<>());
+                for (int ci = 0; ci < pending.positions().size(); ci++) {
+                    BlockPos cp = pending.positions().get(ci);
+                    world.setBlockState(cp, net.minecraft.block.Blocks.AIR.getDefaultState());
+                    broken.put(cp, pending.states().get(ci));
+                    restore.put(cp, now + STAIR_CRUMBLE_RESTORE_TICKS);
+                    brokenStage.put(cp, pending.stage());
+                }
+                BlockPos first = pending.positions().get(0);
+                world.playSound(null, first, net.minecraft.sound.SoundEvents.BLOCK_STONE_BREAK,
+                        net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.6f);
+                world.spawnParticles(new net.minecraft.particle.BlockStateParticleEffect(
+                                net.minecraft.particle.ParticleTypes.BLOCK,
+                                net.minecraft.block.Blocks.POLISHED_ANDESITE.getDefaultState()),
+                        first.getX() + 0.5, first.getY() + 0.5, first.getZ() + 0.5,
+                        20, 0.5, 0.3, 0.5, 0.06);
+                STAIR_NEXT_CRUMBLE_TICK.put(sessionKey, now + STAIR_CRUMBLE_ROW_INTERVAL);
+            }
+            // "Заживление": сломанные обвалом блоки возвращаются (кроме уже обрушенных
+            // фрагментов за спиной — там пустота навсегда)
+            Map<BlockPos, Long> restoreMap = STAIR_BROKEN_RESTORE.get(sessionKey);
+            if (restoreMap != null && !restoreMap.isEmpty()) {
+                for (BlockPos cp : new ArrayList<>(restoreMap.keySet())) {
+                    if (now < restoreMap.get(cp)) continue;
+                    int st = STAIR_BROKEN_STAGE.get(sessionKey).getOrDefault(cp, 0);
+                    net.minecraft.block.BlockState was = STAIR_BROKEN.get(sessionKey).get(cp);
+                    if (st >= STAIR_COLLAPSE_NEXT.getOrDefault(sessionKey, 0)
+                            && was != null && world.getBlockState(cp).isAir()) {
+                        world.setBlockState(cp, was);
+                        world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL,
+                                cp.getX() + 0.5, cp.getY() + 0.8, cp.getZ() + 0.5,
+                                3, 0.2, 0.1, 0.2, 0.01);
+                    }
+                    restoreMap.remove(cp);
+                    STAIR_BROKEN.get(sessionKey).remove(cp);
+                    STAIR_BROKEN_STAGE.get(sessionKey).remove(cp);
+                }
+            }
+
+            // 3) Гнилые ступени: скрип-предупреждение и пролом под ногами
+            java.util.Set<BlockPos> rotten = STAIR_ROTTEN.get(sessionKey);
             if (rotten.contains(supportPos) && player.isOnGround()) {
                 int stand = STAIR_ROTTEN_STAND.getOrDefault(playerId, 0) + 1;
                 STAIR_ROTTEN_STAND.put(playerId, stand);
@@ -2209,6 +2328,69 @@ public final class DreamManager {
         STAIR_WALL_TOP_Y.remove(sessionKey);
         STAIR_WAKE_TICK.remove(sessionKey);
         STAIR_FINAL_ANNOUNCED.remove(sessionKey);
+        STAIR_LAST_FLIGHT_STAGE.remove(sessionKey);
+        STAIR_CRUMBLE_PENDING.remove(sessionKey);
+        STAIR_NEXT_CRUMBLE_TICK.remove(sessionKey);
+        STAIR_BROKEN.remove(sessionKey);
+        STAIR_BROKEN_RESTORE.remove(sessionKey);
+        STAIR_BROKEN_STAGE.remove(sessionKey);
+    }
+
+    /**
+     * ДОБАВЛЕНО (фидбек): выбирает следующий ряд ступеней ПРЯМО ПЕРЕД игроком на текущем
+     * марше — ближайший по высоте ряд в направлении подъёма, который ещё стоит. Ряд, на
+     * котором игрок стоит, никогда не крошится. В ряд входят обе колонны ступеней,
+     * подступенки под ними и перила пролёта.
+     */
+    private static StairCrumble pickCrumbleRow(ServerWorld world, BlockPos center, UUID sessionKey,
+                                               int stage, BlockPos supportPos, long now) {
+        List<List<BlockPos>> allStages = STAIR_STAGE_BLOCKS.get(sessionKey);
+        if (allStages == null || stage >= allStages.size()) return null;
+        boolean first = stage % 4 == 1; // марш 1 идёт на север (z убывает), марш 3 — на юг (z растёт)
+        int supZ = supportPos.getZ();
+
+        // Ряды стоящих целых ступеней фрагмента по z (гнилые варпед-ступени пропускаем —
+        // у них своя механика пролома под ногами)
+        Map<Integer, List<BlockPos>> rows = new HashMap<>();
+        Map<Integer, Integer> rowY = new HashMap<>();
+        for (BlockPos pos : allStages.get(stage)) {
+            if (world.getBlockState(pos).getBlock() != net.minecraft.block.Blocks.POLISHED_ANDESITE_STAIRS) {
+                continue;
+            }
+            rows.computeIfAbsent(pos.getZ(), k -> new ArrayList<>()).add(pos);
+            rowY.put(pos.getZ(), pos.getY());
+        }
+        int bestZ = 0;
+        int bestY = Integer.MAX_VALUE;
+        boolean found = false;
+        for (Integer z : rows.keySet()) {
+            boolean ahead = first ? z < supZ : z > supZ;
+            if (!ahead) continue;
+            int y = rowY.get(z);
+            if (y < bestY || (y == bestY && Math.abs(z - supZ) < Math.abs(bestZ - supZ))) {
+                bestY = y;
+                bestZ = z;
+                found = true;
+            }
+        }
+        if (!found) return null;
+        List<BlockPos> positions = new ArrayList<>();
+        List<net.minecraft.block.BlockState> states = new ArrayList<>();
+        for (BlockPos stair : rows.get(bestZ)) {
+            positions.add(stair);
+            states.add(world.getBlockState(stair));
+            BlockPos riser = stair.down();
+            if (world.getBlockState(riser).getBlock() == net.minecraft.block.Blocks.POLISHED_ANDESITE) {
+                positions.add(riser);
+                states.add(world.getBlockState(riser));
+            }
+            BlockPos rail = new BlockPos(center.getX(), stair.getY() + 1, stair.getZ());
+            if (world.getBlockState(rail).getBlock() == net.minecraft.block.Blocks.IRON_BARS) {
+                positions.add(rail);
+                states.add(world.getBlockState(rail));
+            }
+        }
+        return new StairCrumble(positions, states, stage, now + STAIR_CRUMBLE_WARN_TICKS);
     }
 
     // =====================================================================
@@ -2452,6 +2634,160 @@ public final class DreamManager {
             if (block == net.minecraft.block.Blocks.POLISHED_BLACKSTONE
                     || block == net.minecraft.block.Blocks.GLASS) {
                 world.setBlockState(pos, net.minecraft.block.Blocks.AIR.getDefaultState());
+            }
+        }
+    }
+
+    // =====================================================================
+    // ДОБАВЛЕНО (сон "Пустота с глазами", фидбек "не хватает движа в начале"):
+    // первые 30 секунд во тьме вокруг игрока одна за другой открываются пары
+    // светящихся глаз, сердцебиение ускоряется, а Наблюдатели медленно
+    // сжимают кольцо — сон сразу давит, а не ждёт, пока игрок сам найдёт дверь.
+    // =====================================================================
+
+    /** Тик сна "Пустота с глазами": открывающиеся глаза, сердцебиение, сжатие кольца. */
+    public static void tickVoidOfEyes(MinecraftServer server) {
+        if (ACTIVE.isEmpty()) return;
+        long now = server.getTicks();
+
+        for (UUID playerId : new ArrayList<>(ACTIVE.keySet())) {
+            ActiveDream active = ACTIVE.get(playerId);
+            if (active == null || !active.dreamId().equals(SomniumMod.id("void_of_eyes"))) {
+                continue; // не наш сон
+            }
+            ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
+            if (player == null || !(player.getEntityWorld() instanceof ServerWorld world)) continue;
+
+            UUID sessionKey = sessionKey(playerId);
+
+            // 0) Ленивая инициализация
+            if (!VOE_START_TICK.containsKey(sessionKey)) {
+                VOE_START_TICK.put(sessionKey, now);
+                player.sendMessage(net.minecraft.text.Text.literal(
+                        "§5Ты не один в этой тьме. Ищи портал пробуждения — и не отводи взгляд от Наблюдателей."), true);
+            }
+            long elapsed = now - VOE_START_TICK.get(sessionKey);
+
+            // 0.1) Защитный свипер: случайных монстров тут быть не должно
+            if (now % 10 == 0) {
+                for (net.minecraft.entity.mob.MobEntity mob : world.getEntitiesByClass(
+                        net.minecraft.entity.mob.MobEntity.class,
+                        new net.minecraft.util.math.Box(player.getBlockPos()).expand(64, 16, 64),
+                        e -> e instanceof net.minecraft.entity.mob.Monster
+                                && !(e instanceof com.somnium.mod.entity.nightmare.WatcherEntity))) {
+                    mob.discard();
+                }
+            }
+
+            // 1) Первые 30 секунд: во тьме вокруг открываются пары глаз
+            if (elapsed < 600 && now % 40 == 0) {
+                int pairs = 2 + RANDOM.nextInt(2);
+                for (int p = 0; p < pairs; p++) {
+                    double angle = RANDOM.nextDouble() * Math.PI * 2;
+                    double dist = 8.0 + RANDOM.nextDouble() * 7.0;
+                    double ex = player.getX() + Math.cos(angle) * dist;
+                    double ez = player.getZ() + Math.sin(angle) * dist;
+                    double ey = player.getY() + 1.5 + (RANDOM.nextDouble() - 0.5);
+                    // Пара глаз: две светящиеся точки рядом
+                    world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                            ex - 0.22, ey, ez, 1, 0.02, 0.02, 0.02, 0.0);
+                    world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                            ex + 0.22, ey, ez, 1, 0.02, 0.02, 0.02, 0.0);
+                    if (RANDOM.nextInt(3) == 0) {
+                        world.playSound(null, ex, ey, ez,
+                                net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_AMBIENT,
+                                net.minecraft.sound.SoundCategory.AMBIENT, 0.6f, 0.3f);
+                    }
+                }
+            }
+
+            // 2) Сердцебиение ускоряется по мере того, как тьма просыпается
+            if (elapsed < 1200 && now % 100 == 0) {
+                float pitch = (float) (0.6 + Math.min(0.6, elapsed / 2400.0));
+                world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                        net.minecraft.sound.SoundEvents.ENTITY_WARDEN_HEARTBEAT,
+                        net.minecraft.sound.SoundCategory.AMBIENT, 0.9f, pitch);
+            }
+
+            // 3) Кольцо сжимается: каждые 15 секунд Наблюдатели оказываются ближе
+            if (now % 300 == 0) {
+                double radius = Math.max(9.0, 26.0 - (elapsed / 300.0) * 2.5);
+                for (com.somnium.mod.entity.nightmare.WatcherEntity watcher : world.getEntitiesByClass(
+                        com.somnium.mod.entity.nightmare.WatcherEntity.class,
+                        new net.minecraft.util.math.Box(player.getBlockPos()).expand(60, 16, 60),
+                        e -> true)) {
+                    if (watcher.squaredDistanceTo(player) < radius * radius) continue; // уже в кольце
+                    double angle = RANDOM.nextDouble() * Math.PI * 2;
+                    double wx = player.getX() + Math.cos(angle) * radius;
+                    double wz = player.getZ() + Math.sin(angle) * radius;
+                    watcher.setPosition(wx, player.getY(), wz);
+                    float yaw = (float) (Math.atan2(player.getZ() - wz, player.getX() - wx) * 180.0 / Math.PI) - 90.0f;
+                    watcher.setYaw(yaw);
+                    watcher.setHeadYaw(yaw);
+                    world.playSound(null, wx, player.getY(), wz,
+                            net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
+                            net.minecraft.sound.SoundCategory.HOSTILE, 0.5f, 0.4f);
+                }
+            }
+        }
+    }
+
+    // =====================================================================
+    // ДОБАВЛЕНО ("портал в мир снов"): стоишь в портале 4 секунды — переносит
+    // в мир снов (somnium:dream_portal_world); там строится платформа со
+    // встречным порталом, через него — назад в реальный мир к точке входа.
+    // =====================================================================
+
+    /** Тик портала снов: отсчёт стояния в плёнке и телепортация туда-обратно. */
+    public static void tickDreamPortal(MinecraftServer server) {
+        if (DREAM_PORTAL_STAND.isEmpty() && server.getPlayerManager().getPlayerList().isEmpty()) return;
+
+        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+            if (!(player.getEntityWorld() instanceof ServerWorld world)) continue;
+
+            boolean inPortal = world.getBlockState(player.getBlockPos()).getBlock()
+                            == com.somnium.mod.registry.ModBlocks.DREAM_PORTAL
+                    || world.getBlockState(player.getBlockPos().up()).getBlock()
+                            == com.somnium.mod.registry.ModBlocks.DREAM_PORTAL;
+            if (!inPortal) {
+                DREAM_PORTAL_STAND.remove(player.getUuid());
+                continue;
+            }
+
+            int stand = DREAM_PORTAL_STAND.getOrDefault(player.getUuid(), 0) + 1;
+            DREAM_PORTAL_STAND.put(player.getUuid(), stand);
+            if (stand == 30) {
+                player.sendMessage(net.minecraft.text.Text.literal(
+                        "§5Граница снов тает под ногами..."), true);
+            }
+            if (stand < 80) continue;
+            // Пауза после телепорта (анти-баунс): уходим в минус, отсчёт начнётся снова
+            DREAM_PORTAL_STAND.put(player.getUuid(), -60);
+
+            if (world.getRegistryKey().equals(ModDimensions.DREAM_PORTAL_WORLD)) {
+                // Назад в реальность — к точке, откуда игрок вошёл
+                ServerWorld overworld = server.getOverworld();
+                BlockPos back = DREAM_PORTAL_RETURN.remove(player.getUuid());
+                if (back == null) back = overworld.getSpawnPos();
+                player.teleport(overworld, back.getX() + 0.5, back.getY(), back.getZ() + 0.5,
+                        player.getYaw(), player.getPitch());
+                player.sendMessage(net.minecraft.text.Text.literal(
+                        "§7Ты выныриваешь из сна обратно в реальность..."), true);
+                overworld.playSound(null, back, net.minecraft.sound.SoundEvents.BLOCK_PORTAL_TRAVEL,
+                        net.minecraft.sound.SoundCategory.PLAYERS, 0.6f, 1.2f);
+            } else {
+                // В мир снов — запоминаем, откуда пришёл
+                DREAM_PORTAL_RETURN.put(player.getUuid(), player.getBlockPos());
+                ServerWorld dreamWorld = server.getWorld(ModDimensions.DREAM_PORTAL_WORLD);
+                if (dreamWorld == null) continue;
+                DreamPortalHelper.ensureDreamPortalBuilt(dreamWorld);
+                double[] arrival = DreamPortalHelper.dreamArrivalPoint();
+                player.teleport(dreamWorld, arrival[0], arrival[1], arrival[2], 180.0f, 0.0f);
+                player.sendMessage(net.minecraft.text.Text.literal(
+                        "§5Ты шагнул в мир снов. Встречный портал на платформе вернёт тебя домой."), true);
+                dreamWorld.playSound(null, arrival[0], arrival[1], arrival[2],
+                        net.minecraft.sound.SoundEvents.BLOCK_PORTAL_TRAVEL,
+                        net.minecraft.sound.SoundCategory.PLAYERS, 0.6f, 0.8f);
             }
         }
     }
