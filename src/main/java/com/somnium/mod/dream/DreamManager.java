@@ -1266,8 +1266,19 @@ public final class DreamManager {
         FEAST_TOAST_ITEM.remove(dreamStateKey);
         FEAST_GUESTS.remove(dreamStateKey);
         FEAST_NEXT_GUEST_SOUND.remove(dreamStateKey);
-        // Канал тоста — per-player
-        FEAST_TOAST_CHANNEL_END.remove(player.getUuid());
+        FEAST_JUDGE_FOCUS_POS.remove(dreamStateKey);
+        FEAST_JUDGE_FOCUS_UNTIL.remove(dreamStateKey);
+        // Догорающие блюда убираем из мира, чтобы не висели вечными предметами
+        if (player.getEntityWorld() instanceof ServerWorld feastWorld) {
+            for (UUID burningUuid : FEAST_BURNING_DISHES.keySet()) {
+                var burning = feastWorld.getEntity(burningUuid);
+                if (burning != null) burning.discard();
+            }
+        }
+        FEAST_BURNING_DISHES.clear();
+        // Зажигалка и кубок — сонные предметы, в реальный мир их забирать нельзя
+        removeFeastItems(player);
+        FEAST_LIGHTER_GIVEN.remove(player.getUuid());
 
         // ДОБАВЛЕНО (сон "Сон-в-сне"): очищаем данные о погоде при пробуждении
         DREAM_WITHIN_DREAM_ORIGINAL_POS.remove(player.getUuid());
@@ -1981,30 +1992,41 @@ public final class DreamManager {
     private static final Map<UUID, Integer> FEAST_COURSES_DONE = new HashMap<>();
     /** UUID Кубка Тоста — финальный выход из сна */
     private static final Map<UUID, UUID> FEAST_TOAST_ITEM = new HashMap<>();
-    /** Игрок -> тик, когда он допьёт кубок (канал тоста) */
-    private static final Map<UUID, Long> FEAST_TOAST_CHANNEL_END = new HashMap<>();
     /** Всего блюд за пир — после них подают кубок */
     private static final int FEAST_COURSES = 5;
     /** Пауза между блюдами (~15 сек); первая подача через 10 сек */
     private static final int FEAST_DISH_INTERVAL = 300;
     private static final int FEAST_FIRST_DISH_DELAY = 200;
-    /** Блюдо ждёт решения игрока 20 секунд, потом гости обиженно убирают его */
+    /** Блюдо ждёт решения игрока 20 секунд, потом судьи обиженно убирают его */
     private static final int FEAST_DISH_LIFETIME = 400;
-    /** Рассудок за исходы блюд: съел свежее / съел тронутое / отодвинул тронутое /
-     *  отодвинул свежее / проигнорировал (гости убрали сами) */
+    /** Рассудок за исходы блюд: съел свежее / съел тронутое / сжёг тронутое /
+     *  сжёг свежее / проигнорировал (судьи убрали сами) */
     private static final float FEAST_EAT_FRESH_SANITY = 3.0f;
     private static final float FEAST_EAT_TAINTED_SANITY = -6.0f;
-    private static final float FEAST_REFUSE_TAINTED_SANITY = 2.0f;
-    private static final float FEAST_REFUSE_FRESH_SANITY = -2.0f;
+    private static final float FEAST_BURN_TAINTED_SANITY = 2.0f;
+    private static final float FEAST_BURN_FRESH_SANITY = -2.0f;
     private static final float FEAST_IGNORED_SANITY = -2.0f;
-    /** Канал тоста — 3 секунды, пока игрок пьёт */
-    private static final int FEAST_TOAST_CHANNEL_TICKS = 60;
     /** Шанс, что поданное блюдо тронуто */
     private static final double FEAST_TAINTED_CHANCE = 0.45;
-    /** UUID гостей пира (неподвижные одержимые за столом) — для взгляда вслед игроку */
+    /** UUID судей пира (неподвижные одержимые за столом) — для взгляда вслед игроку */
     private static final Map<UUID, List<UUID>> FEAST_GUESTS = new HashMap<>();
-    /** Тик следующего жуткого звука гостей */
+    /** Тик следующего жуткого звука судей */
     private static final Map<UUID, Long> FEAST_NEXT_GUEST_SOUND = new HashMap<>();
+    /** Блюдо, подожжённое зажигалкой: UUID сущности -> тик, когда оно догорит и исчезнет */
+    private static final Map<UUID, Long> FEAST_BURNING_DISHES = new HashMap<>();
+    /** Как долго блюдо зрелищно горит на столе (1.5 сек) */
+    private static final int FEAST_BURN_TICKS = 30;
+    /** Куда смотрят судьи, когда реагируют на событие (иначе — на игрока) */
+    private static final Map<UUID, BlockPos> FEAST_JUDGE_FOCUS_POS = new HashMap<>();
+    /** Тик, до которого действует фокус судей */
+    private static final Map<UUID, Long> FEAST_JUDGE_FOCUS_UNTIL = new HashMap<>();
+    /** Длительность фокуса судей на событии (3 сек) */
+    private static final int FEAST_JUDGE_FOCUS_TICKS = 60;
+    /** Игроки, которым уже выдали Зажигалку судей (сообщение показываем один раз) */
+    private static final java.util.Set<UUID> FEAST_LIGHTER_GIVEN = new java.util.HashSet<>();
+    /** NBT-метки сонных предметов пира — по ним же чистим инвентарь при пробуждении */
+    private static final String FEAST_LIGHTER_TAG = "somnium_feast_lighter";
+    private static final String FEAST_TOAST_TAG = "somnium_feast_toast";
 
     /** ДОБАВЛЕНО: Сон-в-сне - сохранённые блоки чанка для каждого игрока */
     private static final Map<UUID, ChunkSnapshot> DREAM_WITHIN_DREAM_CHUNKS = new HashMap<>();
@@ -2550,26 +2572,100 @@ public final class DreamManager {
     }
 
     /**
-     * ДОБАВЛЕНО (сон "Кровавый пир", редизайн "Последний ужин"): строит банкетную сцену —
-     * длинный стол из полированного чернита, за которым по дальней стороне сидят гости-
-     * манекены (стенды с головами иссер-скелетов). Игрок садится напротив них; блюда
-     * подаются на центральную "тарелку" перед ним (см. tickCrimsonFeast).
+     * ДОБАВЛЕНО (сон "Кровавый пир", редизайн "Последний ужин"): строит банкетный зал —
+     * тёмный чернитно-багровый чертог с базальтовыми колоннами, люстрой из фонарей душ,
+     * кострами душ по углам, багровыми знамёнами и длинным столом. За столом — пять
+     * Судей пира: одержимые в черепах иссер-скелетов и тёмных рясах, неподвижные,
+     * вечно смотрящие на игрока (см. tickCrimsonFeast). Игрок спавнится на багровой
+     * дорожке напротив них; блюда подаются на центральную "тарелку".
      */
     private static void setupCrimsonFeastTable(ServerWorld world, BlockPos center, UUID sessionKey) {
+        int floorY = center.getY() - 1;
+
+        // === ЗАЛ: пол, дорожка, стены с колоннами, потолок ===
+        for (int x = -8; x <= 8; x++) {
+            for (int z = -7; z <= 7; z++) {
+                // Пол: полированный чернит; багровая дорожка от входа к столу
+                boolean runner = Math.abs(x) <= 1 && z >= -7;
+                world.setBlockState(new BlockPos(center.getX() + x, floorY, center.getZ() + z),
+                        runner ? net.minecraft.block.Blocks.NETHER_WART_BLOCK.getDefaultState()
+                               : net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState());
+                // Потолок
+                world.setBlockState(new BlockPos(center.getX() + x, floorY + 7, center.getZ() + z),
+                        net.minecraft.block.Blocks.POLISHED_BLACKSTONE_BRICKS.getDefaultState());
+            }
+        }
+        for (int y = 0; y <= 5; y++) {
+            for (int x = -8; x <= 8; x++) {
+                for (int z = -7; z <= 7; z++) {
+                    boolean wall = Math.abs(x) == 8 || Math.abs(z) == 7;
+                    if (!wall) continue;
+                    // Дверной проём на юге — оттуда "пришёл" игрок
+                    if (z == 7 && Math.abs(x) <= 1 && y <= 2) continue;
+                    boolean pillar = (Math.abs(x) == 8 && (Math.abs(z) == 7 || z == -3 || z == 1))
+                                  || (Math.abs(z) == 7 && (Math.abs(x) == 8 || x == -4 || x == 0 || x == 4));
+                    BlockPos pos = new BlockPos(center.getX() + x, floorY + 1 + y, center.getZ() + z);
+                    if (pillar) {
+                        world.setBlockState(pos, net.minecraft.block.Blocks.POLISHED_BASALT.getDefaultState()
+                                .with(net.minecraft.block.PillarBlock.AXIS, net.minecraft.util.math.Direction.Axis.Y));
+                    } else if (y == 5) {
+                        world.setBlockState(pos, net.minecraft.block.Blocks.CHISELED_POLISHED_BLACKSTONE.getDefaultState());
+                    } else if (y == 3) {
+                        // Багровый пояс по стенам
+                        world.setBlockState(pos, net.minecraft.block.Blocks.RED_NETHER_BRICKS.getDefaultState());
+                    } else {
+                        world.setBlockState(pos, net.minecraft.block.Blocks.POLISHED_BLACKSTONE_BRICKS.getDefaultState());
+                    }
+                }
+            }
+        }
+
+        // === ДЕКОР: люстра над столом, костры душ по углам, знамёна, свечи ===
+        // Люстра: цепь с потолка + висячий фонарь душ над центром стола
+        world.setBlockState(center.add(0, 5, -3), net.minecraft.block.Blocks.CHAIN.getDefaultState());
+        world.setBlockState(center.add(0, 4, -3), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState()
+                .with(net.minecraft.block.LanternBlock.HANGING, true));
+        // Костры душ по углам зала — синие ведьмины огни и дым
+        for (int[] corner : new int[][] {{-6, -5}, {6, -5}, {-6, 5}, {6, 5}}) {
+            world.setBlockState(new BlockPos(center.getX() + corner[0], floorY + 1, center.getZ() + corner[1]),
+                    net.minecraft.block.Blocks.SOUL_CAMPFIRE.getDefaultState()
+                            .with(net.minecraft.block.CampfireBlock.LIT, true));
+        }
+        // Багровые знамёна на северной стене за судьями
+        for (int bx : new int[] {-3, 0, 3}) {
+            world.setBlockState(center.add(bx, 3, -7),
+                    net.minecraft.block.Blocks.RED_WALL_BANNER.getDefaultState()
+                            .with(net.minecraft.block.WallBannerBlock.FACING, net.minecraft.util.math.Direction.SOUTH));
+        }
+
+        // === СТОЛ: 9 блоков вдоль оси X, свечи, фонари душ по краям ===
         List<BlockPos> plates = new ArrayList<>();
-        // Стол 9 блоков вдоль оси X, в 3 блоках к северу от спавна игрока
         for (int x = -4; x <= 4; x++) {
             BlockPos tablePos = center.add(x, 0, -3);
             world.setBlockState(tablePos, net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState());
             plates.add(tablePos);
         }
-        // Свечи-фонари душ по краям стола — багровый свет пира
+        // Свечи на столе (не занимая центральную тарелку игрока)
+        for (int cx : new int[] {-3, 3}) {
+            world.setBlockState(center.add(cx, 1, -3), net.minecraft.block.Blocks.RED_CANDLE.getDefaultState()
+                    .with(net.minecraft.block.CandleBlock.CANDLES, 2)
+                    .with(net.minecraft.block.CandleBlock.LIT, true));
+        }
+        // Фонари душ по краям стола
         world.setBlockState(center.add(-5, 0, -3), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
         world.setBlockState(center.add(5, 0, -3), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
+        // Троны судей за столом: сиденья-ступени и высокие спинки
+        for (int tx = -4; tx <= 4; tx += 2) {
+            world.setBlockState(center.add(tx, 0, -5), net.minecraft.block.Blocks.BLACKSTONE_STAIRS.getDefaultState()
+                    .with(net.minecraft.block.StairsBlock.FACING, net.minecraft.util.math.Direction.SOUTH));
+            world.setBlockState(center.add(tx, 0, -6), net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState());
+            world.setBlockState(center.add(tx, 1, -6), net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState());
+            world.setBlockState(center.add(tx, 2, -6), net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState());
+        }
 
-        // Гости пира: неподвижные одержимые сельчане (зомби-жители) по дальней стороне стола.
-        // ИЗМЕНЕНО по фидбеку "манекены не страшные": вместо стендов — живые кошмары без AI,
-        // которые ВЕЧНО смотрят на игрока (см. tickCrimsonFeast) и издают глухие звуки
+        // === СУДЬИ ПИРА: одержимые в черепах иссер-скелетов и тёмных рясах.
+        // ИЗМЕНЕНО по фидбеку "манекены не страшные": череп-маска + ряса + хореография
+        // взглядов и реакций (см. tickCrimsonFeast, judgesReact) ===
         List<UUID> guests = new ArrayList<>();
         for (int x = -4; x <= 4; x += 2) {
             var guestType = com.somnium.mod.registry.ModEntities.FERAL_VILLAGER;
@@ -2577,12 +2673,22 @@ public final class DreamManager {
             if (created == null) continue;
             created.refreshPositionAndAngles(
                     center.getX() + x + 0.5, center.getY(), center.getZ() - 4 + 0.5, 0f, 0f);
-            created.setAiDisabled(true);      // неподвижен: сидит за столом
+            created.setAiDisabled(true);      // неподвижен: восседает за столом
             created.setInvulnerable(true);    // его нельзя убить — он часть сцены
             created.setSilent(true);          // звуки только через сценарий
             created.setPersistent();          // не деспавнится
-            created.setCustomName(net.minecraft.text.Text.literal("§4Гость пира"));
+            created.setCustomName(net.minecraft.text.Text.literal("§4§lСудья пира"));
             created.setCustomNameVisible(true);
+            // Череп иссер-скелета как маска и тёмная ряса из окрашенной кожи
+            created.equipStack(net.minecraft.entity.EquipmentSlot.HEAD,
+                    new ItemStack(net.minecraft.item.Items.WITHER_SKELETON_SKULL));
+            created.equipStack(net.minecraft.entity.EquipmentSlot.CHEST,
+                    dyedRobe(new ItemStack(net.minecraft.item.Items.LEATHER_CHESTPLATE)));
+            created.equipStack(net.minecraft.entity.EquipmentSlot.LEGS,
+                    dyedRobe(new ItemStack(net.minecraft.item.Items.LEATHER_LEGGINGS)));
+            for (net.minecraft.entity.EquipmentSlot slot : net.minecraft.entity.EquipmentSlot.values()) {
+                created.setEquipmentDropChance(slot, 0.0f);
+            }
             world.spawnEntity(created);
             guests.add(created.getUuid());
         }
@@ -2595,23 +2701,37 @@ public final class DreamManager {
         FEAST_DISH_TAINTED.remove(sessionKey);
         FEAST_COURSES_DONE.put(sessionKey, 0);
         FEAST_TOAST_ITEM.remove(sessionKey);
+        FEAST_JUDGE_FOCUS_POS.remove(sessionKey);
+        FEAST_JUDGE_FOCUS_UNTIL.remove(sessionKey);
         NEXT_DISH_TICK.put(sessionKey, (long) world.getServer().getTicks() + FEAST_FIRST_DISH_DELAY);
     }
 
+    /** Тёмно-багровая ряса судьи — кожаный доспех, окрашенный почти в чёрный. */
+    private static ItemStack dyedRobe(ItemStack stack) {
+        if (stack.getItem() instanceof net.minecraft.item.DyeableItem dyeable) {
+            dyeable.setColor(stack, 0x1B0507);
+        }
+        return stack;
+    }
+
     /**
-     * ДОБАВЛЕНО (сон "Кровавый пир", редизайн "Последний ужин"): за столом по очереди
+     * ДОБАВЛЕНО (сон "Кровавый пир", редизайн "Последний ужин"): судьи по очереди
      * подают FEAST_COURSES блюд. Каждое блюдо либо свежее, либо тронутое (дымится зелёным):
-     *  - ОТВЕДАТЬ (подобрать): свежее +FEAST_EAT_FRESH_SANITY рассудка; тронутое —
-     *    FEAST_EAT_TAINTED_SANITY рассудка, яд и смех гостей;
-     *  - ОТОДВИНУТЬ (ПКМ по блюду, см. onFeastEntityUse): тронутое отодвинуть правильно
-     *    (+FEAST_REFUSE_TAINTED_SANITY), свежее — обидеть гостей (FEAST_REFUSE_FRESH_SANITY);
-     *  - ПРОИГНОРИРОВАТЬ: через FEAST_DISH_LIFETIME гости обиженно убирают блюдо сами.
-     * После всех блюд подают Кубок Тоста — подними его (ПКМ) и выпей (канал 3 сек) = победа.
-     * Поражение — смерть от монстров пира (DIED_IN_DREAM); таймаут — "пережил без тоста".
+     *  - ОТВЕДАТЬ (подойти или ПКМ рукой): свежее +FEAST_EAT_FRESH_SANITY рассудка;
+     *    тронутое — FEAST_EAT_TAINTED_SANITY, яд и смех судей;
+     *  - СЖЕЧЬ (ПКМ Зажигалкой судей по блюду): тронутое сжечь правильно
+     *    (+FEAST_BURN_TAINTED_SANITY, судьи одобряют), свежее — оскорбление кухни
+     *    (FEAST_BURN_FRESH_SANITY, судьи шипят);
+     *  - ПРОИГНОРИРОВАТЬ: через FEAST_DISH_LIFETIME судьи обиженно убирают блюдо сами.
+     * После всех блюд подают Кубок Тоста — возьми его и ВЫПЕЙ до дна (зажми ПКМ) = победа.
+     * Поражение — смерть во сне (DIED_IN_DREAM); таймаут — "пережил без тоста".
      */
     public static void tickCrimsonFeast(MinecraftServer server) {
         if (ACTIVE.isEmpty()) return;
         long now = server.getTicks();
+
+        // Подожжённые блюда догорают независимо от того, какой игрок сейчас обрабатывается
+        tickBurningDishes(server, now);
 
         for (UUID playerId : new ArrayList<>(ACTIVE.keySet())) {
             ActiveDream active = ACTIVE.get(playerId);
@@ -2624,13 +2744,43 @@ public final class DreamManager {
 
             UUID sessionKey = sessionKey(playerId);
 
-            // 0.5) Гости пира: вечно смотрят на игрока и иногда издают глухие звуки
+            // 0.1) ЗАЩИТА СЦЕНЫ: никаких агрессивных мобов в зале пира — убираем любого,
+            // кто заспавнился естественно (плоский мир + тёмный зал) или забрёл извне.
+            // Судьи исключены по UUID — они свои.
+            if (now % 10 == 0) {
+                List<BlockPos> platesForSweep = FEAST_TABLES.get(sessionKey);
+                List<UUID> judgeIds = FEAST_GUESTS.get(sessionKey);
+                if (platesForSweep != null && !platesForSweep.isEmpty()) {
+                    BlockPos mid = platesForSweep.get(platesForSweep.size() / 2);
+                    for (net.minecraft.entity.mob.MobEntity mob : world.getEntitiesByClass(
+                            net.minecraft.entity.mob.MobEntity.class,
+                            new net.minecraft.util.math.Box(mid).expand(28, 12, 28),
+                            e -> e instanceof net.minecraft.entity.mob.Monster
+                                    && (judgeIds == null || !judgeIds.contains(e.getUuid())))) {
+                        mob.discard();
+                    }
+                }
+            }
+
+            // 0.2) Зажигалка судей: выдаём участникам пира (и перевыдаём при потере)
+            if (now % 40 == 0 && !hasFeastLighter(player)) {
+                giveFeastLighter(player);
+            }
+
+            // 0.3) Судьи: смотрят на фокус события (горящее блюдо, кубок) или на игрока
             List<UUID> guests = FEAST_GUESTS.get(sessionKey);
             if (guests != null && !guests.isEmpty() && now % 5 == 0) {
+                BlockPos focus = null;
+                Long focusUntil = FEAST_JUDGE_FOCUS_UNTIL.get(sessionKey);
+                if (focusUntil != null && now < focusUntil) {
+                    focus = FEAST_JUDGE_FOCUS_POS.get(sessionKey);
+                }
                 for (UUID guestUuid : guests) {
                     if (world.getEntity(guestUuid) instanceof net.minecraft.entity.mob.MobEntity guest) {
-                        double dx = player.getX() - guest.getX();
-                        double dz = player.getZ() - guest.getZ();
+                        double targetX = focus != null ? focus.getX() + 0.5 : player.getX();
+                        double targetZ = focus != null ? focus.getZ() + 0.5 : player.getZ();
+                        double dx = targetX - guest.getX();
+                        double dz = targetZ - guest.getZ();
                         float lookYaw = (float) (Math.atan2(-dx, dz) * 180.0 / Math.PI);
                         guest.setYaw(lookYaw);
                         guest.setBodyYaw(lookYaw);
@@ -2639,35 +2789,32 @@ public final class DreamManager {
                 }
             }
             if (now >= FEAST_NEXT_GUEST_SOUND.getOrDefault(sessionKey, Long.MAX_VALUE)) {
-                // Один случайный гость "бормочет" низким искажённым голосом
+                // Все судьи разом издают низкий искажённый стон — синхронно и жутко
                 if (guests != null && !guests.isEmpty()) {
-                    UUID guestUuid = guests.get(RANDOM.nextInt(guests.size()));
-                    var guest = world.getEntity(guestUuid);
-                    if (guest != null) {
-                        world.playSound(null, guest.getX(), guest.getY(), guest.getZ(),
-                                net.minecraft.sound.SoundEvents.ENTITY_ZOMBIE_VILLAGER_AMBIENT,
-                                net.minecraft.sound.SoundCategory.HOSTILE, 0.8f, 0.5f);
+                    for (UUID guestUuid : guests) {
+                        var guest = world.getEntity(guestUuid);
+                        if (guest != null) {
+                            world.playSound(null, guest.getX(), guest.getY(), guest.getZ(),
+                                    net.minecraft.sound.SoundEvents.ENTITY_ZOMBIE_VILLAGER_AMBIENT,
+                                    net.minecraft.sound.SoundCategory.HOSTILE, 0.7f, 0.45f);
+                        }
                     }
                 }
                 FEAST_NEXT_GUEST_SOUND.put(sessionKey, now + 300 + RANDOM.nextInt(300));
             }
 
-            // 0) Канал тоста: игрок поднял кубок и пьёт — осталось допить
-            Long toastEnd = FEAST_TOAST_CHANNEL_END.get(playerId);
-            if (toastEnd != null) {
-                if (now >= toastEnd) {
-                    FEAST_TOAST_CHANNEL_END.remove(playerId);
+            // 0.4) Финал: игрок пьёт Кубок Тоста — победа, когда он допьёт до дна
+            if (player.isUsingItem()) {
+                ItemStack activeStack = player.getActiveItem();
+                if (isToastGoblet(activeStack)
+                        && player.getItemUseTime() >= activeStack.getMaxUseTime() - 2) {
+                    judgesReact(world, sessionKey, FeastReaction.CELEBRATE, null);
                     world.playSound(null, player.getX(), player.getY(), player.getZ(),
                             net.minecraft.sound.SoundEvents.ENTITY_PLAYER_LEVELUP,
                             net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
                     wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
-                } else if ((toastEnd - now) % 20 == 0) {
-                    player.sendMessage(net.minecraft.text.Text.literal("§6Ты пьёшь за хозяина пира..."), true);
-                    world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                            net.minecraft.sound.SoundEvents.ENTITY_GENERIC_DRINK,
-                            net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.9f);
+                    continue;
                 }
-                continue;
             }
 
             // 1) На столе активное блюдо — ждём решения игрока
@@ -2678,25 +2825,7 @@ public final class DreamManager {
                 if (dish == null || !dish.isAlive()) {
                     // Блюдо исчезло — игрок его подобрал ("отведал")
                     finishCourse(sessionKey, now);
-                    if (tainted) {
-                        SanityManager.get(player).addSanity(FEAST_EAT_TAINTED_SANITY);
-                        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                                net.minecraft.entity.effect.StatusEffects.POISON, 200, 0));
-                        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                                net.minecraft.entity.effect.StatusEffects.NAUSEA, 160, 0));
-                        player.sendMessage(net.minecraft.text.Text.literal(
-                                "§2Блюдо было тронуто... Гости хохочут."), true);
-                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                                net.minecraft.sound.SoundEvents.ENTITY_WITCH_CELEBRATE,
-                                net.minecraft.sound.SoundCategory.HOSTILE, 1.0f, 0.6f);
-                    } else {
-                        SanityManager.get(player).addSanity(FEAST_EAT_FRESH_SANITY);
-                        player.sendMessage(net.minecraft.text.Text.literal(
-                                "§6Свежее блюдо. Гости одобрительно кивают."), true);
-                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                                net.minecraft.sound.SoundEvents.ENTITY_GENERIC_EAT,
-                                net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
-                    }
+                    eatDish(player, world, sessionKey, tainted);
                 } else {
                     // Тронутое блюдо дымится зелёным — внимательный игрок заметит
                     if (tainted && now % 10 == 0) {
@@ -2705,15 +2834,13 @@ public final class DreamManager {
                                 3, 0.15, 0.1, 0.15, 0.01);
                     }
                     if (now >= FEAST_DISH_DEADLINE.getOrDefault(sessionKey, now)) {
-                        // Игрок проигнорировал блюдо — гости обиженно убирают его сами
+                        // Игрок проигнорировал блюдо — судьи обиженно убирают его сами
                         dish.discard();
                         finishCourse(sessionKey, now);
                         SanityManager.get(player).addSanity(FEAST_IGNORED_SANITY);
                         player.sendMessage(net.minecraft.text.Text.literal(
-                                "§7Гости молча убирают нетронутое блюдо... Они обижены."), true);
-                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                                net.minecraft.sound.SoundEvents.ENTITY_VILLAGER_NO,
-                                net.minecraft.sound.SoundCategory.NEUTRAL, 1.0f, 0.6f);
+                                "§7Судьи молча убирают нетронутое блюдо... Они обижены."), true);
+                        judgesReact(world, sessionKey, FeastReaction.ANGRY, null);
                     }
                 }
                 continue;
@@ -2724,14 +2851,18 @@ public final class DreamManager {
             if (done >= FEAST_COURSES) {
                 if (!FEAST_TOAST_ITEM.containsKey(sessionKey)) {
                     spawnToastGoblet(world, sessionKey);
-                } else if (now % 20 == 0) {
-                    // Кубок манит золотыми частицами
+                } else {
                     UUID toastUuid = FEAST_TOAST_ITEM.get(sessionKey);
                     var toast = world.getEntity(toastUuid);
-                    if (toast != null) {
+                    if (toast != null && now % 20 == 0) {
+                        // Кубок манит золотыми частицами
                         world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
                                 toast.getX(), toast.getY() + 0.4, toast.getZ(),
                                 2, 0.15, 0.1, 0.15, 0.01);
+                    }
+                    if (now % 200 == 0 && !hasToastGoblet(player)) {
+                        player.sendMessage(net.minecraft.text.Text.literal(
+                                "§7Кубок Тоста ждёт на столе — возьми его и выпей до дна."), true);
                     }
                 }
                 continue;
@@ -2790,21 +2921,28 @@ public final class DreamManager {
                     .getPlayer(sessionKey);
             if (player != null) {
                 player.sendMessage(net.minecraft.text.Text.literal(
-                        "§6Первое блюдо. Отведай — или отодвинь (ПКМ), если оно тронуто."), true);
+                        "§6Первое блюдо. Свежее — отведай (подойди или ПКМ), тронутое (зелёный дым) — сожги Зажигалкой (ПКМ по блюду)."),
+                        true);
             }
         }
     }
 
-    /** Ставит на стол Кубок Тоста — финальный выход из сна (ПКМ = поднять и пить). */
+    /** Кубок Тоста как предмет с NBT-меткой — по ней ловим реальное питьё и чистим инвентарь. */
+    private static ItemStack createToastGobletStack() {
+        ItemStack goblet = new ItemStack(net.minecraft.item.Items.HONEY_BOTTLE);
+        goblet.getOrCreateNbt().putBoolean(FEAST_TOAST_TAG, true);
+        goblet.setCustomName(net.minecraft.text.Text.literal("§6§lКубок Тоста"));
+        return goblet;
+    }
+
+    /** Ставит на стол Кубок Тоста — финальный выход из сна (взять и выпить до дна). */
     private static void spawnToastGoblet(ServerWorld world, UUID sessionKey) {
         List<BlockPos> plates = FEAST_TABLES.get(sessionKey);
         if (plates == null || plates.isEmpty()) return;
         BlockPos plate = plates.get(plates.size() / 2);
 
-        ItemStack goblet = new ItemStack(net.minecraft.item.Items.HONEY_BOTTLE);
-        goblet.setCustomName(net.minecraft.text.Text.literal("§6§lКубок Тоста"));
         ItemEntity toast = new ItemEntity(world,
-                plate.getX() + 0.5, plate.getY() + 1.0, plate.getZ() + 0.5, goblet);
+                plate.getX() + 0.5, plate.getY() + 1.0, plate.getZ() + 0.5, createToastGobletStack());
         toast.setNeverDespawn();
         toast.setGlowing(true);
         world.spawnEntity(toast);
@@ -2812,21 +2950,29 @@ public final class DreamManager {
 
         world.playSound(null, plate, net.minecraft.sound.SoundEvents.BLOCK_BELL_USE,
                 net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.6f);
+        // Судьи торжественно поворачиваются к кубку
+        judgesReact(world, sessionKey, FeastReaction.APPROVE, plate);
 
         ServerPlayerEntity player = world.getServer().getPlayerManager().getPlayer(sessionKey);
         if (player != null) {
             player.sendMessage(net.minecraft.text.Text.literal(
-                    "§6Пир окончен. Подними Кубок Тоста (ПКМ) — и проснёшься."), true);
+                    "§6Пир окончен. Возьми Кубок Тоста со стола — и выпей его до дна (зажми ПКМ), чтобы проснуться."),
+                    true);
         }
     }
 
+    /** Виды реакций судей пира на поступки игрока. */
+    private enum FeastReaction { APPROVE, ANGRY, LAUGH, CELEBRATE }
+
     /**
      * ДОБАВЛЕНО (сон "Кровавый пир", редизайн): ПКМ по сущностям пира.
-     * ПКМ по блюду = "отодвинуть" (правильный ответ на тронутое блюдо);
-     * ПКМ по Кубку Тоста = поднять его и начать канал питья (выход из сна).
+     * ПКМ по блюду с Зажигалкой судей в руке = сжечь блюдо (правильный ответ на тронутое);
+     * ПКМ по блюду без зажигалки = съесть его (то же, что подобрать с пола);
+     * ПКМ по Кубку Тоста = взять его в руки (дальше — просто выпить, зажав ПКМ).
      * Регистрация события — UseEntityCallback в SomniumMod#onInitialize.
      */
     public static net.minecraft.util.ActionResult onFeastEntityUse(ServerPlayerEntity player,
+                                                                   net.minecraft.util.Hand hand,
                                                                    net.minecraft.entity.Entity entity) {
         ActiveDream active = ACTIVE.get(player.getUuid());
         if (active == null || !active.dreamId().equals(SomniumMod.id("crimson_feast"))) {
@@ -2838,37 +2984,28 @@ public final class DreamManager {
         UUID sessionKey = sessionKey(player.getUuid());
         long now = world.getServer().getTicks();
 
-        // ПКМ по блюду — отодвинуть
+        // ПКМ по блюду: зажигалка в любой руке — сжечь; иначе — съесть
         UUID dishUuid = FEAST_DISH_ITEM.get(sessionKey);
         if (dishUuid != null && dishUuid.equals(entity.getUuid())) {
             boolean tainted = FEAST_DISH_TAINTED.getOrDefault(sessionKey, false);
-            entity.discard();
-            finishCourse(sessionKey, now);
-            if (tainted) {
-                SanityManager.get(player).addSanity(FEAST_REFUSE_TAINTED_SANITY);
-                player.sendMessage(net.minecraft.text.Text.literal(
-                        "§6Ты отодвигаешь тронутое блюдо. Гости уважительно молчат."), true);
+            if (isFeastLighter(player.getStackInHand(hand)) || isFeastLighter(player.getMainHandStack())) {
+                burnDish(player, world, sessionKey, entity, tainted, now);
             } else {
-                SanityManager.get(player).addSanity(FEAST_REFUSE_FRESH_SANITY);
-                player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                        net.minecraft.entity.effect.StatusEffects.HUNGER, 300, 0));
-                player.sendMessage(net.minecraft.text.Text.literal(
-                        "§7Ты отодвигаешь свежее блюдо. Гости недовольно бормочут."), true);
-                world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                        net.minecraft.sound.SoundEvents.ENTITY_VILLAGER_NO,
-                        net.minecraft.sound.SoundCategory.NEUTRAL, 1.0f, 0.7f);
+                entity.discard();
+                finishCourse(sessionKey, now);
+                eatDish(player, world, sessionKey, tainted);
             }
             return net.minecraft.util.ActionResult.SUCCESS;
         }
 
-        // ПКМ по Кубку Тоста — поднять и пить (канал 3 секунды до пробуждения)
+        // ПКМ по Кубку Тоста — взять в руки (питьё ловится в tickCrimsonFeast)
         UUID toastUuid = FEAST_TOAST_ITEM.get(sessionKey);
         if (toastUuid != null && toastUuid.equals(entity.getUuid())) {
             entity.discard();
             FEAST_TOAST_ITEM.remove(sessionKey);
-            FEAST_TOAST_CHANNEL_END.put(player.getUuid(), now + FEAST_TOAST_CHANNEL_TICKS);
+            player.giveItemStack(createToastGobletStack());
             player.sendMessage(net.minecraft.text.Text.literal(
-                    "§6Ты поднимаешь Кубок Тоста... Гости замирают."), true);
+                    "§6Ты поднимаешь Кубок Тоста. Судьи замирают — выпей его (зажми ПКМ)."), true);
             world.playSound(null, player.getX(), player.getY(), player.getZ(),
                     net.minecraft.sound.SoundEvents.ITEM_BOTTLE_FILL,
                     net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.7f);
@@ -2876,6 +3013,189 @@ public final class DreamManager {
         }
 
         return net.minecraft.util.ActionResult.PASS;
+    }
+
+    /** Игрок съел блюдо (подобрал или ПКМ рукой): свежее — награда, тронутое — яд и смех. */
+    private static void eatDish(ServerPlayerEntity player, ServerWorld world, UUID sessionKey,
+                                boolean tainted) {
+        if (tainted) {
+            SanityManager.get(player).addSanity(FEAST_EAT_TAINTED_SANITY);
+            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                    net.minecraft.entity.effect.StatusEffects.POISON, 200, 0));
+            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                    net.minecraft.entity.effect.StatusEffects.NAUSEA, 160, 0));
+            player.sendMessage(net.minecraft.text.Text.literal(
+                    "§2Блюдо было тронуто... Судьи хохочут."), true);
+            judgesReact(world, sessionKey, FeastReaction.LAUGH, null);
+        } else {
+            SanityManager.get(player).addSanity(FEAST_EAT_FRESH_SANITY);
+            player.sendMessage(net.minecraft.text.Text.literal(
+                    "§6Свежее блюдо. Судьи одобрительно кивают."), true);
+            world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                    net.minecraft.sound.SoundEvents.ENTITY_GENERIC_EAT,
+                    net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
+            judgesReact(world, sessionKey, FeastReaction.APPROVE, null);
+        }
+    }
+
+    /** Игрок поджёг блюдо Зажигалкой судей: зрелищное горение на столе и реакция судей. */
+    private static void burnDish(ServerPlayerEntity player, ServerWorld world, UUID sessionKey,
+                                 net.minecraft.entity.Entity dish, boolean tainted, long now) {
+        dish.setFireTicks(FEAST_BURN_TICKS + 20);
+        FEAST_BURNING_DISHES.put(dish.getUuid(), now + FEAST_BURN_TICKS);
+        finishCourse(sessionKey, now);
+        BlockPos dishPos = dish.getBlockPos();
+        world.playSound(null, dishPos, net.minecraft.sound.SoundEvents.ITEM_FLINTANDSTEEL_USE,
+                net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 1.0f);
+        world.playSound(null, dishPos, net.minecraft.sound.SoundEvents.BLOCK_FIRE_AMBIENT,
+                net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.8f);
+        if (tainted) {
+            // Правильное решение: тронутое блюдо уничтожено огнём
+            SanityManager.get(player).addSanity(FEAST_BURN_TAINTED_SANITY);
+            player.sendMessage(net.minecraft.text.Text.literal(
+                    "§6Тронутое блюдо сгорает в пламени. Судьи одобрительно склоняют головы."), true);
+            judgesReact(world, sessionKey, FeastReaction.APPROVE, dishPos);
+        } else {
+            // Свежее блюдо сожжено — оскорбление кухни хозяина
+            SanityManager.get(player).addSanity(FEAST_BURN_FRESH_SANITY);
+            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                    net.minecraft.entity.effect.StatusEffects.HUNGER, 300, 0));
+            player.sendMessage(net.minecraft.text.Text.literal(
+                    "§7Ты сжёг свежее блюдо. Судьи недовольно шипят."), true);
+            judgesReact(world, sessionKey, FeastReaction.ANGRY, dishPos);
+        }
+    }
+
+    /** Реакция судей: звуки, частицы над каждым, взгляды на точку события (если задана). */
+    private static void judgesReact(ServerWorld world, UUID sessionKey, FeastReaction reaction,
+                                    BlockPos focusPos) {
+        List<UUID> guests = FEAST_GUESTS.get(sessionKey);
+        if (guests == null || guests.isEmpty()) return;
+        long now = world.getServer().getTicks();
+        for (UUID guestUuid : guests) {
+            var guest = world.getEntity(guestUuid);
+            if (guest == null) continue;
+            switch (reaction) {
+                case APPROVE -> {
+                    world.playSound(null, guest.getX(), guest.getY(), guest.getZ(),
+                            net.minecraft.sound.SoundEvents.ENTITY_VILLAGER_YES,
+                            net.minecraft.sound.SoundCategory.HOSTILE, 0.9f, 0.55f);
+                    world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL_FIRE_FLAME,
+                            guest.getX(), guest.getY() + 2.2, guest.getZ(), 6, 0.2, 0.2, 0.2, 0.02);
+                }
+                case ANGRY -> {
+                    world.playSound(null, guest.getX(), guest.getY(), guest.getZ(),
+                            net.minecraft.sound.SoundEvents.ENTITY_VILLAGER_NO,
+                            net.minecraft.sound.SoundCategory.HOSTILE, 0.9f, 0.5f);
+                    world.spawnParticles(net.minecraft.particle.ParticleTypes.ANGRY_VILLAGER,
+                            guest.getX(), guest.getY() + 2.2, guest.getZ(), 4, 0.25, 0.2, 0.25, 0.02);
+                }
+                case LAUGH -> {
+                    world.playSound(null, guest.getX(), guest.getY(), guest.getZ(),
+                            net.minecraft.sound.SoundEvents.ENTITY_WITCH_CELEBRATE,
+                            net.minecraft.sound.SoundCategory.HOSTILE, 0.9f, 0.5f);
+                    world.spawnParticles(net.minecraft.particle.ParticleTypes.WITCH,
+                            guest.getX(), guest.getY() + 2.0, guest.getZ(), 8, 0.3, 0.3, 0.3, 0.02);
+                }
+                case CELEBRATE -> {
+                    world.playSound(null, guest.getX(), guest.getY(), guest.getZ(),
+                            net.minecraft.sound.SoundEvents.ENTITY_VILLAGER_CELEBRATE,
+                            net.minecraft.sound.SoundCategory.HOSTILE, 1.0f, 0.6f);
+                    world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                            guest.getX(), guest.getY() + 2.2, guest.getZ(), 10, 0.3, 0.3, 0.3, 0.05);
+                }
+            }
+        }
+        if (focusPos != null) {
+            FEAST_JUDGE_FOCUS_POS.put(sessionKey, focusPos);
+            FEAST_JUDGE_FOCUS_UNTIL.put(sessionKey, now + FEAST_JUDGE_FOCUS_TICKS);
+        }
+    }
+
+    /** Горящие блюда: пламя и дым, потом блюдо исчезает с шипением и душой-искрой. */
+    private static void tickBurningDishes(MinecraftServer server, long now) {
+        if (FEAST_BURNING_DISHES.isEmpty()) return;
+        for (var entry : new ArrayList<>(FEAST_BURNING_DISHES.entrySet())) {
+            net.minecraft.entity.Entity dish = null;
+            ServerWorld dishWorld = null;
+            for (ServerWorld world : server.getWorlds()) {
+                dish = world.getEntity(entry.getKey());
+                if (dish != null) { dishWorld = world; break; }
+            }
+            if (dish == null) {
+                FEAST_BURNING_DISHES.remove(entry.getKey());
+                continue;
+            }
+            if (now % 3 == 0) {
+                dishWorld.spawnParticles(net.minecraft.particle.ParticleTypes.FLAME,
+                        dish.getX(), dish.getY() + 0.3, dish.getZ(), 4, 0.15, 0.15, 0.15, 0.02);
+                dishWorld.spawnParticles(net.minecraft.particle.ParticleTypes.SMOKE,
+                        dish.getX(), dish.getY() + 0.6, dish.getZ(), 2, 0.1, 0.15, 0.1, 0.01);
+            }
+            if (now >= entry.getValue()) {
+                dishWorld.playSound(null, dish.getX(), dish.getY(), dish.getZ(),
+                        net.minecraft.sound.SoundEvents.BLOCK_FIRE_EXTINGUISH,
+                        net.minecraft.sound.SoundCategory.BLOCKS, 0.8f, 1.2f);
+                dishWorld.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL,
+                        dish.getX(), dish.getY() + 0.3, dish.getZ(), 8, 0.2, 0.2, 0.2, 0.02);
+                dish.discard();
+                FEAST_BURNING_DISHES.remove(entry.getKey());
+            }
+        }
+    }
+
+    /** Создаёт Зажигалку судей — сонный инструмент пира (неразрушима, NBT-метка). */
+    private static ItemStack createFeastLighter() {
+        ItemStack lighter = new ItemStack(net.minecraft.item.Items.FLINT_AND_STEEL);
+        lighter.getOrCreateNbt().putBoolean(FEAST_LIGHTER_TAG, true);
+        lighter.getOrCreateNbt().putBoolean("Unbreakable", true);
+        lighter.setCustomName(net.minecraft.text.Text.literal("§6§lЗажигалка судей"));
+        return lighter;
+    }
+
+    private static boolean isFeastLighter(ItemStack stack) {
+        return stack.getItem() == net.minecraft.item.Items.FLINT_AND_STEEL
+                && stack.getNbt() != null && stack.getNbt().getBoolean(FEAST_LIGHTER_TAG);
+    }
+
+    private static boolean hasFeastLighter(ServerPlayerEntity player) {
+        for (int i = 0; i < player.getInventory().size(); i++) {
+            if (isFeastLighter(player.getInventory().getStack(i))) return true;
+        }
+        return false;
+    }
+
+    /** Выдаёт зажигалку и один раз объясняет, зачем она (onboarding механики). */
+    private static void giveFeastLighter(ServerPlayerEntity player) {
+        player.giveItemStack(createFeastLighter());
+        if (FEAST_LIGHTER_GIVEN.add(player.getUuid())) {
+            player.sendMessage(net.minecraft.text.Text.literal(
+                    "§6Судьи вручают тебе Зажигалку. Тронутые блюда (дымятся зелёным) — сжигай ею: ПКМ по блюду."),
+                    false);
+        }
+    }
+
+    private static boolean isToastGoblet(ItemStack stack) {
+        return stack.getItem() == net.minecraft.item.Items.HONEY_BOTTLE
+                && stack.getNbt() != null && stack.getNbt().getBoolean(FEAST_TOAST_TAG);
+    }
+
+    private static boolean hasToastGoblet(ServerPlayerEntity player) {
+        for (int i = 0; i < player.getInventory().size(); i++) {
+            if (isToastGoblet(player.getInventory().getStack(i))) return true;
+        }
+        return false;
+    }
+
+    /** Сонные предметы пира нельзя выносить в реальный мир — снимаем при пробуждении. */
+    private static void removeFeastItems(ServerPlayerEntity player) {
+        var inventory = player.getInventory();
+        for (int i = 0; i < inventory.size(); i++) {
+            ItemStack stack = inventory.getStack(i);
+            if (isFeastLighter(stack) || isToastGoblet(stack)) {
+                inventory.setStack(i, ItemStack.EMPTY);
+            }
+        }
     }
 
     /**

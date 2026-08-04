@@ -160,7 +160,7 @@ public final class SomniumMod implements ModInitializer {
         // отодвинуть, ПКМ по Кубку Тоста = поднять и выпить (выход из сна)
         net.fabricmc.fabric.api.event.player.UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
             if (player instanceof net.minecraft.server.network.ServerPlayerEntity serverPlayer) {
-                return com.somnium.mod.dream.DreamManager.onFeastEntityUse(serverPlayer, entity);
+                return com.somnium.mod.dream.DreamManager.onFeastEntityUse(serverPlayer, hand, entity);
             }
             return net.minecraft.util.ActionResult.PASS;
         });
