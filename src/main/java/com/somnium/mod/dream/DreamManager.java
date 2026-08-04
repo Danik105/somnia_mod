@@ -1264,6 +1264,8 @@ public final class DreamManager {
         NEXT_DISH_TICK.remove(dreamStateKey);
         FEAST_COURSES_DONE.remove(dreamStateKey);
         FEAST_TOAST_ITEM.remove(dreamStateKey);
+        FEAST_GUESTS.remove(dreamStateKey);
+        FEAST_NEXT_GUEST_SOUND.remove(dreamStateKey);
         // Канал тоста — per-player
         FEAST_TOAST_CHANNEL_END.remove(player.getUuid());
 
@@ -1999,6 +2001,10 @@ public final class DreamManager {
     private static final int FEAST_TOAST_CHANNEL_TICKS = 60;
     /** Шанс, что поданное блюдо тронуто */
     private static final double FEAST_TAINTED_CHANCE = 0.45;
+    /** UUID гостей пира (неподвижные одержимые за столом) — для взгляда вслед игроку */
+    private static final Map<UUID, List<UUID>> FEAST_GUESTS = new HashMap<>();
+    /** Тик следующего жуткого звука гостей */
+    private static final Map<UUID, Long> FEAST_NEXT_GUEST_SOUND = new HashMap<>();
 
     /** ДОБАВЛЕНО: Сон-в-сне - сохранённые блоки чанка для каждого игрока */
     private static final Map<UUID, ChunkSnapshot> DREAM_WITHIN_DREAM_CHUNKS = new HashMap<>();
@@ -2561,21 +2567,30 @@ public final class DreamManager {
         world.setBlockState(center.add(-5, 0, -3), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
         world.setBlockState(center.add(5, 0, -3), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
 
-        // Гости-манекены по дальней стороне стола, лицом к месту игрока
+        // Гости пира: неподвижные одержимые сельчане (зомби-жители) по дальней стороне стола.
+        // ИЗМЕНЕНО по фидбеку "манекены не страшные": вместо стендов — живые кошмары без AI,
+        // которые ВЕЧНО смотрят на игрока (см. tickCrimsonFeast) и издают глухие звуки
+        List<UUID> guests = new ArrayList<>();
         for (int x = -4; x <= 4; x += 2) {
-            ArmorStandEntity guest = new ArmorStandEntity(world,
-                    center.getX() + x + 0.5, center.getY(), center.getZ() - 4 + 0.5);
-            guest.setInvulnerable(true);
-            guest.setHideBasePlate(true);
-            guest.setCustomName(net.minecraft.text.Text.literal("§4Гость пира"));
-            guest.setCustomNameVisible(true);
-            guest.equipStack(net.minecraft.entity.EquipmentSlot.HEAD,
-                    new ItemStack(net.minecraft.item.Items.WITHER_SKELETON_SKULL));
-            guest.setYaw(0f); // смотрят на юг — прямо на игрока
-            world.spawnEntity(guest);
+            var guestType = com.somnium.mod.registry.ModEntities.FERAL_VILLAGER;
+            var created = guestType.create(world);
+            if (created == null) continue;
+            created.refreshPositionAndAngles(
+                    center.getX() + x + 0.5, center.getY(), center.getZ() - 4 + 0.5, 0f, 0f);
+            created.setAiDisabled(true);      // неподвижен: сидит за столом
+            created.setInvulnerable(true);    // его нельзя убить — он часть сцены
+            created.setSilent(true);          // звуки только через сценарий
+            created.setPersistent();          // не деспавнится
+            created.setCustomName(net.minecraft.text.Text.literal("§4Гость пира"));
+            created.setCustomNameVisible(true);
+            world.spawnEntity(created);
+            guests.add(created.getUuid());
         }
 
         FEAST_TABLES.put(sessionKey, plates);
+        FEAST_GUESTS.put(sessionKey, guests);
+        FEAST_NEXT_GUEST_SOUND.put(sessionKey,
+                (long) world.getServer().getTicks() + 300 + RANDOM.nextInt(200));
         FEAST_DISH_ITEM.remove(sessionKey);
         FEAST_DISH_TAINTED.remove(sessionKey);
         FEAST_COURSES_DONE.put(sessionKey, 0);
@@ -2608,6 +2623,34 @@ public final class DreamManager {
             if (player == null || !(player.getEntityWorld() instanceof ServerWorld world)) continue;
 
             UUID sessionKey = sessionKey(playerId);
+
+            // 0.5) Гости пира: вечно смотрят на игрока и иногда издают глухие звуки
+            List<UUID> guests = FEAST_GUESTS.get(sessionKey);
+            if (guests != null && !guests.isEmpty() && now % 5 == 0) {
+                for (UUID guestUuid : guests) {
+                    if (world.getEntity(guestUuid) instanceof net.minecraft.entity.mob.MobEntity guest) {
+                        double dx = player.getX() - guest.getX();
+                        double dz = player.getZ() - guest.getZ();
+                        float lookYaw = (float) (Math.atan2(-dx, dz) * 180.0 / Math.PI);
+                        guest.setYaw(lookYaw);
+                        guest.setBodyYaw(lookYaw);
+                        guest.setHeadYaw(lookYaw);
+                    }
+                }
+            }
+            if (now >= FEAST_NEXT_GUEST_SOUND.getOrDefault(sessionKey, Long.MAX_VALUE)) {
+                // Один случайный гость "бормочет" низким искажённым голосом
+                if (guests != null && !guests.isEmpty()) {
+                    UUID guestUuid = guests.get(RANDOM.nextInt(guests.size()));
+                    var guest = world.getEntity(guestUuid);
+                    if (guest != null) {
+                        world.playSound(null, guest.getX(), guest.getY(), guest.getZ(),
+                                net.minecraft.sound.SoundEvents.ENTITY_ZOMBIE_VILLAGER_AMBIENT,
+                                net.minecraft.sound.SoundCategory.HOSTILE, 0.8f, 0.5f);
+                    }
+                }
+                FEAST_NEXT_GUEST_SOUND.put(sessionKey, now + 300 + RANDOM.nextInt(300));
+            }
 
             // 0) Канал тоста: игрок поднял кубок и пьёт — осталось допить
             Long toastEnd = FEAST_TOAST_CHANNEL_END.get(playerId);
