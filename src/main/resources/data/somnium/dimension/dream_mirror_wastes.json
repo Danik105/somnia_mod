@@ -1,0 +1,48 @@
+{
+  "_comment": "ПЛЕЙСХОЛДЕР-ГЕНЕРАЦИЯ. Осколки-зеркала как отдельные блоки/структуры — Приоритет 2.",
+  "type": "somnium:dream_dimension_type",
+  "generator": {
+    "type": "minecraft:flat",
+    "settings": {
+      "layers": [
+        { "block": "minecraft:bedrock", "height": 1 },
+        { "block": "minecraft:sandstone", "height": 3 },
+        { "block": "minecraft:sand", "height": 2 }
+      ],
+      "biome": "minecraft:desert",
+      "structures": {
+        "structures": {}
+      }
+    }
+  },
+  "spawn_overrides": {
+    "creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "monster": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "ambient": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "axolotls": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "underground_water_creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "water_creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "water_ambient": {
+      "probability": 0.0,
+      "spawners": []
+    }
+  }
+}

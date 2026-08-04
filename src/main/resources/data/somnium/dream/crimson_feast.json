@@ -1,0 +1,9 @@
+{
+  "display_name_key": "somnium.dream.crimson_feast",
+  "structure_template": "somnium:crimson_feast_village",
+  "monster_entity_ids": ["somnium:feral_villager", "somnium:flesh_golem"],
+  "base_weight": 14,
+  "min_sanity_to_appear": 100,
+  "duration_ticks": 5400,
+  "objective": "Собрать 3 Осколка Ясности в разрушенной деревне до заката."
+}

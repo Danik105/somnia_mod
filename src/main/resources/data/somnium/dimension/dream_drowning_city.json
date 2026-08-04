@@ -1,0 +1,48 @@
+{
+  "_comment": "ПЛЕЙСХОЛДЕР-ГЕНЕРАЦИЯ (Приоритет 1: просто рабочее измерение). Настоящая генерация 'Тонущего города' (руины + подъём воды) — задача Приоритета 2, см. TODO в DreamManager и README.",
+  "type": "somnium:dream_drowning_city_type",
+  "generator": {
+    "type": "minecraft:flat",
+    "settings": {
+      "layers": [
+        { "block": "minecraft:bedrock", "height": 1 },
+        { "block": "minecraft:stone", "height": 4 },
+        { "block": "minecraft:sand", "height": 2 }
+      ],
+      "biome": "minecraft:beach",
+      "structures": {
+        "structures": {}
+      }
+    }
+  },
+  "spawn_overrides": {
+    "creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "monster": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "ambient": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "axolotls": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "underground_water_creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "water_creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "water_ambient": {
+      "probability": 0.0,
+      "spawners": []
+    }
+  }
+}

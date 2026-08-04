@@ -1,0 +1,49 @@
+{
+  "_comment": "Зеркальная комната - маленькое закрытое пространство",
+  "type": "somnium:dream_dimension_type",
+  "generator": {
+    "type": "minecraft:flat",
+    "settings": {
+      "layers": [
+        { "block": "minecraft:bedrock", "height": 1 },
+        { "block": "minecraft:blackstone", "height": 4 }
+      ],
+      "biome": "minecraft:the_void",
+      "features": false,
+      "lakes": false,
+      "structures": {
+        "structures": {}
+      }
+    }
+  },
+  "spawn_overrides": {
+    "creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "monster": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "ambient": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "axolotls": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "underground_water_creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "water_creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "water_ambient": {
+      "probability": 0.0,
+      "spawners": []
+    }
+  }
+}

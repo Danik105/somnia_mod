@@ -1,0 +1,203 @@
+package com.somnium.mod.dream;
+
+import com.somnium.mod.SomniumMod;
+import net.minecraft.util.Identifier;
+
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.Set;
+
+/**
+ * Реестр всех типов снов. Данные грузятся из data/somnium/dream/*.json через
+ * стандартный Fabric SimpleResourceReloadListener (регистрация — см. bootstrap()).
+ *
+ * Сейчас здесь заглушка со статической регистрацией 6 базовых снов "в коде",
+ * чтобы каркас был рабочим сразу. В реальной сборке нужно заменить jsonDefaults()
+ * на настоящую загрузку через ResourceManager (см. TODO ниже) — тогда сны будут
+ * полностью дата-драйвенными и редактируемыми без пересборки мода.
+ */
+public final class DreamRegistry {
+
+    private static final Map<Identifier, DreamType> DREAMS = new LinkedHashMap<>();
+    private static final Random RANDOM = new Random();
+
+    private DreamRegistry() {}
+
+    public static void bootstrap() {
+        DREAMS.clear();
+        for (DreamType dream : jsonDefaults()) {
+            DREAMS.put(dream.id(), dream);
+        }
+        SomniumMod.LOGGER.info("[Somnium] Загружено {} типов снов", DREAMS.size());
+
+        // TODO: заменить статическую загрузку на:
+        // ResourceManagerHelper.get(ResourceType.SERVER_DATA).registerReloadListener(new DreamReloadListener());
+        // чтобы читать data/somnium/dream/*.json как обычные датапак-ресурсы.
+    }
+
+    public static DreamType get(Identifier id) {
+        return DREAMS.get(id);
+    }
+
+    public static Map<Identifier, DreamType> all() {
+        return DREAMS;
+    }
+
+    /**
+     * Взвешенный выбор следующего сна. Учитывает текущий рассудок игрока —
+     * некоторые "тяжёлые" сны (например, Кошмар-босс) доступны только при низком рассудке.
+     */
+    public static DreamType pickWeighted(float currentSanity, Identifier avoidRepeatOf) {
+        List<DreamType> pool = new ArrayList<>();
+        int totalWeight = 0;
+        for (DreamType dream : DREAMS.values()) {
+            if (currentSanity > dream.minSanityToAppear()) continue;
+            if (dream.id().equals(avoidRepeatOf) && DREAMS.size() > 1) continue;
+            pool.add(dream);
+            totalWeight += dream.baseWeight();
+        }
+        if (pool.isEmpty()) {
+            pool.addAll(DREAMS.values());
+            totalWeight = pool.stream().mapToInt(DreamType::baseWeight).sum();
+        }
+        int roll = RANDOM.nextInt(Math.max(1, totalWeight));
+        int cursor = 0;
+        for (DreamType dream : pool) {
+            cursor += dream.baseWeight();
+            if (roll < cursor) return dream;
+        }
+        return pool.get(pool.size() - 1);
+    }
+
+    public static DreamType pickSharedWeighted(float currentSanity, Identifier avoidRepeatOf) {
+        return pickWeighted(currentSanity, avoidRepeatOf);
+    }
+
+    /**
+     * ДОБАВЛЕНО: выбор сна с избеганием последних N снов из истории игрока.
+     * Используется новой системой SharedDreamSession для предотвращения повторений.
+     */
+    public static DreamType pickWeightedAvoidingHistory(float currentSanity, List<Identifier> recentHistory) {
+        List<DreamType> pool = new ArrayList<>();
+        int totalWeight = 0;
+        for (DreamType dream : DREAMS.values()) {
+            if (currentSanity > dream.minSanityToAppear()) continue;
+            if (recentHistory.contains(dream.id())) continue; // Избегаем недавних снов
+            pool.add(dream);
+            totalWeight += dream.baseWeight();
+        }
+        if (pool.isEmpty()) {
+            // Если все сны были недавно - берём любой доступный
+            pool.addAll(DREAMS.values());
+            totalWeight = pool.stream().mapToInt(DreamType::baseWeight).sum();
+        }
+        int roll = RANDOM.nextInt(Math.max(1, totalWeight));
+        int cursor = 0;
+        for (DreamType dream : pool) {
+            cursor += dream.baseWeight();
+            if (roll < cursor) return dream;
+        }
+        return pool.get(pool.size() - 1);
+    }
+
+    /** Базовые 6 снов "зашитые" в код — см. соответствующие JSON в data/somnium/dream/ как эталон формата. */
+    private static List<DreamType> jsonDefaults() {
+        List<DreamType> list = new ArrayList<>();
+
+        // ИЗМЕНЕНО: Тонущий город - оставлена дверь (воздушный карман логичен как цель)
+        list.add(new DreamType(
+                SomniumMod.id("drowning_city"), "somnium.dream.drowning_city",
+                "somnium:drowning_city_ruins",
+                List.of(SomniumMod.id("drowned_wretch"), SomniumMod.id("phantom_eel")),
+                20, 100f, 6000L,
+                "Найти воздушный карман на крыше собора до того, как вода поднимется до верха.",
+                DreamObjectiveType.REACH_DOOR, null, 0
+        ));
+
+        // ИЗМЕНЕНО: Лес теней - цель реализована: ведьмины огни ведут к двери, шёпот карает за оборот
+        list.add(new DreamType(
+                SomniumMod.id("shadow_forest"), "somnium.dream.shadow_forest",
+                "somnium:shadow_forest_procedural",
+                List.of(SomniumMod.id("lurking_shade")),
+                20, 100f, 7200L,
+                "Иди на ведьмины огни к Двери пробуждения. Шёпот зовёт обернуться — не смотри: тень ждёт твоего взгляда.",
+                DreamObjectiveType.REACH_DOOR, null, 0
+        ));
+
+        // БЕЗ ИЗМЕНЕНИЙ: Пустошь зеркал - BOSS_KILL (победить Двойника)
+        list.add(new DreamType(
+                SomniumMod.id("mirror_wastes"), "somnium.dream.mirror_wastes",
+                "somnium:mirror_wastes_procedural",
+                List.of(SomniumMod.id("mirrored_double")),
+                18, 100f, 6600L,
+                "Уничтожить своего Двойника, не разбив ни одного зеркала-осколка.",
+                DreamObjectiveType.BOSS_KILL, SomniumMod.id("mirrored_double"), 0
+        ));
+
+        // ИЗМЕНЕНО: Шахта - процедурный лабиринт; стены за спиной обрушаются и зарастают
+        list.add(new DreamType(
+                SomniumMod.id("collapsing_mine"), "somnium.dream.collapsing_mine",
+                "somnium:collapsing_mine_procedural",
+                List.of(SomniumMod.id("screaming_miner"), SomniumMod.id("blind_burrower")),
+                18, 100f, 6000L,
+                "Найди дверь выхода из лабиринта. Шахта дышит: проходы обрушаются и зарастают за твоей спиной.",
+                DreamObjectiveType.REACH_DOOR, null, 0
+        ));
+
+        // ИЗМЕНЕНО: Кровавый пир - новая механика: ешь и теряй рассудок ИЛИ голодай и теряй здоровье
+        list.add(new DreamType(
+                SomniumMod.id("crimson_feast"), "somnium.dream.crimson_feast",
+                "somnium:crimson_feast_village",
+                List.of(SomniumMod.id("feral_villager"), SomniumMod.id("flesh_golem")),
+                14, 100f, 5400L,
+                "Пир подаёт блюда. Отведаешь — потеряешь рассудок и разбудишь гнев стола. Откажешься — голод будет точить тело. Переживи пир.",
+                null, null, 0 // сон на выживание до конца пира (таймаут)
+        ));
+
+        // ИЗМЕНЕНО: Пустота с глазами - оставлена дверь (портал пробуждения логичен)
+        list.add(new DreamType(
+                SomniumMod.id("void_of_eyes"), "somnium.dream.void_of_eyes",
+                "somnium:void_of_eyes_procedural",
+                List.of(SomniumMod.id("watcher")),
+                14, 100f, 4800L,
+                "Отступать к порталу пробуждения, не отрывая взгляда от Наблюдателей.",
+                DreamObjectiveType.REACH_DOOR, null, 0
+        ));
+
+        // ИЗМЕНЕНО: Сон-в-сне - БЕЗ цели, БЕЗ монстров, только таймаут
+        // Игрок должен просто находиться в скопированном мире 7.5 минут
+        list.add(new DreamType(
+                SomniumMod.id("dream_within_dream"), "somnium.dream.dream_within_dream",
+                "NONE",
+                List.of(), // БЕЗ монстров
+                6, 20f, 9000L,
+                "", // БЕЗ цели
+                null, null, 0 // БЕЗ objectiveType - только таймаут
+        ));
+
+        // ИЗМЕНЕНО: 8-й сон "Падающие доски" - платформа 6×6, обрушение ускоряется и преследует игрока
+        list.add(new DreamType(
+                SomniumMod.id("falling_planks"), "somnium.dream.falling_planks",
+                "somnium:falling_planks_void",
+                List.of(), // нет монстров, только падение
+                12, 100f, 3600L, // 3 минуты (короткий, интенсивный сон)
+                "Пол проваливается под ногами всё быстрее. Держись в движении и доживи до пробуждения.",
+                null, null, 0 // нет цели, только таймаут или падение
+        ));
+
+        // ДОБАВЛЕНО: 9-й сон "Зеркальная комната" - отражение игрока копирует его, затем атакует
+        list.add(new DreamType(
+                SomniumMod.id("mirror_room"), "somnium.dream.mirror_room",
+                "somnium:mirror_room_chamber",
+                List.of(SomniumMod.id("mirror_reflection")),
+                18, 50f, 3600L, // 3 минуты, требует средний уровень рассудка
+                "Разбить зеркало и победить своё отражение.",
+                DreamObjectiveType.BOSS_KILL, SomniumMod.id("mirror_reflection"), 0
+        ));
+
+        return list;
+    }
+}

@@ -1,0 +1,48 @@
+{
+  "_comment": "ПЛЕЙСХОЛДЕР-ГЕНЕРАЦИЯ. Обвал пути за спиной игрока и настоящий лабиринт шахты — Приоритет 2.",
+  "type": "somnium:dream_dimension_type",
+  "generator": {
+    "type": "minecraft:flat",
+    "settings": {
+      "layers": [
+        { "block": "minecraft:bedrock", "height": 1 },
+        { "block": "minecraft:stone", "height": 30 },
+        { "block": "minecraft:cobblestone", "height": 1 }
+      ],
+      "biome": "minecraft:stony_peaks",
+      "structures": {
+        "structures": {}
+      }
+    }
+  },
+  "spawn_overrides": {
+    "creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "monster": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "ambient": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "axolotls": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "underground_water_creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "water_creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "water_ambient": {
+      "probability": 0.0,
+      "spawners": []
+    }
+  }
+}

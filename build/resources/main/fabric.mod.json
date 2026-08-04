@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "somnium",
+  "version": "0.1.0-alpha",
+  "name": "Somnium — Сны и Рассудок",
+  "description": "Каждый сон — путешествие в кошмар. Не спите слишком долго, и кошмары найдут вас сами.",
+  "authors": ["Вы + Claude"],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/somnium/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.somnium.mod.SomniumMod"],
+    "client": ["com.somnium.mod.client.SomniumClient"]
+  },
+  "mixins": [
+    "somnium.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.14.21",
+    "fabric-api": "*",
+    "minecraft": "~1.20.1"
+  }
+}

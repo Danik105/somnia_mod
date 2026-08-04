@@ -1,0 +1,1066 @@
+Структура папок тома Danil
+Серийный номер тома: 4030-9603
+E:.
+|   build.gradle
+|   CHANGELOG.md
+|   Check
+|   Compilation
+|   Configure
+|   FINAL_REPORT.md
+|   FIX_COMPILATION.md
+|   gradle.properties
+|   gradlew
+|   gradlew.bat
+|   item.canDespawn()
+|   README.md
+|   Run
+|   settings.gradle
+|   structure.txt
+|   SUMMARY.md
+|   Task
+|   TODO.md
+|   
++---.gradle
+|   |   file-system.probe
+|   |   
+|   +---9.5.1
+|   |   |   gc.properties
+|   |   |   
+|   |   +---checksums
+|   |   |       checksums.lock
+|   |   |       md5-checksums.bin
+|   |   |       sha1-checksums.bin
+|   |   |       
+|   |   +---executionHistory
+|   |   |       executionHistory.bin
+|   |   |       executionHistory.lock
+|   |   |       
+|   |   +---expanded
+|   |   |       expanded.lock
+|   |   |       
+|   |   +---fileChanges
+|   |   |       last-build.bin
+|   |   |       
+|   |   +---fileHashes
+|   |   |       fileHashes.bin
+|   |   |       fileHashes.lock
+|   |   |       resourceHashesCache.bin
+|   |   |       
+|   |   \---vcsMetadata
+|   +---buildOutputCleanup
+|   |       buildOutputCleanup.lock
+|   |       cache.properties
+|   |       outputFiles.bin
+|   |       
+|   +---loom-cache
+|   |   +---minecraftMaven
+|   |   |   \---net
+|   |   |       \---minecraft
+|   |   |           +---minecraft-clientOnly-ae207af94b
+|   |   |           |   \---1.21.11-net.fabricmc.yarn.1_21_11.1.21.11+build.4-v2
+|   |   |           |           minecraft-clientOnly-ae207af94b-1.21.11-net.fabricmc.yarn.1_21_11.1.21.11+build.4-v2.jar
+|   |   |           |           minecraft-clientOnly-ae207af94b-1.21.11-net.fabricmc.yarn.1_21_11.1.21.11+build.4-v2.jar.backup
+|   |   |           |           minecraft-clientOnly-ae207af94b-1.21.11-net.fabricmc.yarn.1_21_11.1.21.11+build.4-v2.pom
+|   |   |           |           
+|   |   |           +---minecraft-clientOnly-bfb32e66d2
+|   |   |           |   \---26.1.2
+|   |   |           |           minecraft-clientOnly-bfb32e66d2-26.1.2.jar
+|   |   |           |           minecraft-clientOnly-bfb32e66d2-26.1.2.jar.backup
+|   |   |           |           minecraft-clientOnly-bfb32e66d2-26.1.2.pom
+|   |   |           |           
+|   |   |           +---minecraft-common-ae207af94b
+|   |   |           |   \---1.21.11-net.fabricmc.yarn.1_21_11.1.21.11+build.4-v2
+|   |   |           |           minecraft-common-ae207af94b-1.21.11-net.fabricmc.yarn.1_21_11.1.21.11+build.4-v2.jar
+|   |   |           |           minecraft-common-ae207af94b-1.21.11-net.fabricmc.yarn.1_21_11.1.21.11+build.4-v2.jar.backup
+|   |   |           |           minecraft-common-ae207af94b-1.21.11-net.fabricmc.yarn.1_21_11.1.21.11+build.4-v2.pom
+|   |   |           |           
+|   |   |           \---minecraft-common-bfb32e66d2
+|   |   |               \---26.1.2
+|   |   |                       minecraft-common-bfb32e66d2-26.1.2.jar
+|   |   |                       minecraft-common-bfb32e66d2-26.1.2.jar.backup
+|   |   |                       minecraft-common-bfb32e66d2-26.1.2.pom
+|   |   |                       
+|   |   \---remapped_mods
+|   |       \---remapped
+|   |           +---maven
+|   |           |   \---modrinth
+|   |           |       \---mOgUt4GM-4b5d3c0a
+|   |           |           \---Tyk71iSw
+|   |           |                   mOgUt4GM-4b5d3c0a-Tyk71iSw.jar
+|   |           |                   mOgUt4GM-4b5d3c0a-Tyk71iSw.pom
+|   |           |                   
+|   |           +---me
+|   |           |   \---shedaniel
+|   |           |       \---cloth
+|   |           |           +---basic-math-4b5d3c0a
+|   |           |           |   \---0.6.1
+|   |           |           |           basic-math-4b5d3c0a-0.6.1-sources.jar
+|   |           |           |           basic-math-4b5d3c0a-0.6.1.jar
+|   |           |           |           basic-math-4b5d3c0a-0.6.1.pom
+|   |           |           |           
+|   |           |           \---cloth-config-fabric-4b5d3c0a
+|   |           |               \---21.11.153
+|   |           |                       cloth-config-fabric-4b5d3c0a-21.11.153-fabric.jar
+|   |           |                       cloth-config-fabric-4b5d3c0a-21.11.153.pom
+|   |           |                       
+|   |           \---net
+|   |               \---fabricmc
+|   |                   \---fabric-api
+|   |                       +---fabric-api-4b5d3c0a-common
+|   |                       |   \---0.139.5+1.21.11
+|   |                       |           fabric-api-4b5d3c0a-common-0.139.5+1.21.11-sources.jar
+|   |                       |           fabric-api-4b5d3c0a-common-0.139.5+1.21.11.jar
+|   |                       |           fabric-api-4b5d3c0a-common-0.139.5+1.21.11.pom
+|   |                       |           
+|   |                       +---fabric-api-base-4b5d3c0a-common
+|   |                       |   \---1.0.5+4ebb5c0853
+|   |                       |           fabric-api-base-4b5d3c0a-common-1.0.5+4ebb5c0853-sources.jar
+|   |                       |           fabric-api-base-4b5d3c0a-common-1.0.5+4ebb5c0853.jar
+|   |                       |           fabric-api-base-4b5d3c0a-common-1.0.5+4ebb5c0853.pom
+|   |                       |           
+|   |                       +---fabric-api-lookup-api-v1-4b5d3c0a-common
+|   |                       |   \---1.6.113+1fb1cde93e
+|   |                       |           fabric-api-lookup-api-v1-4b5d3c0a-common-1.6.113+1fb1cde93e-sources.jar
+|   |                       |           fabric-api-lookup-api-v1-4b5d3c0a-common-1.6.113+1fb1cde93e.jar
+|   |                       |           fabric-api-lookup-api-v1-4b5d3c0a-common-1.6.113+1fb1cde93e.pom
+|   |                       |           
+|   |                       +---fabric-biome-api-v1-4b5d3c0a-common
+|   |                       |   \---17.1.1+4fc5413f3e
+|   |                       |           fabric-biome-api-v1-4b5d3c0a-common-17.1.1+4fc5413f3e-sources.jar
+|   |                       |           fabric-biome-api-v1-4b5d3c0a-common-17.1.1+4fc5413f3e.jar
+|   |                       |           fabric-biome-api-v1-4b5d3c0a-common-17.1.1+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-block-api-v1-4b5d3c0a-common
+|   |                       |   \---1.1.10+4ebb5c083e
+|   |                       |           fabric-block-api-v1-4b5d3c0a-common-1.1.10+4ebb5c083e-sources.jar
+|   |                       |           fabric-block-api-v1-4b5d3c0a-common-1.1.10+4ebb5c083e.jar
+|   |                       |           fabric-block-api-v1-4b5d3c0a-common-1.1.10+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-block-view-api-v2-4b5d3c0a-client
+|   |                       |   \---1.0.39+4ebb5c083e
+|   |                       |           fabric-block-view-api-v2-4b5d3c0a-client-1.0.39+4ebb5c083e-sources.jar
+|   |                       |           fabric-block-view-api-v2-4b5d3c0a-client-1.0.39+4ebb5c083e.jar
+|   |                       |           fabric-block-view-api-v2-4b5d3c0a-client-1.0.39+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-block-view-api-v2-4b5d3c0a-common
+|   |                       |   \---1.0.39+4ebb5c083e
+|   |                       |           fabric-block-view-api-v2-4b5d3c0a-common-1.0.39+4ebb5c083e-sources.jar
+|   |                       |           fabric-block-view-api-v2-4b5d3c0a-common-1.0.39+4ebb5c083e.jar
+|   |                       |           fabric-block-view-api-v2-4b5d3c0a-common-1.0.39+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-client-gametest-api-v1-4b5d3c0a-client
+|   |                       |   \---4.3.5+bfe9fcf43e
+|   |                       |           fabric-client-gametest-api-v1-4b5d3c0a-client-4.3.5+bfe9fcf43e-sources.jar
+|   |                       |           fabric-client-gametest-api-v1-4b5d3c0a-client-4.3.5+bfe9fcf43e.jar
+|   |                       |           fabric-client-gametest-api-v1-4b5d3c0a-client-4.3.5+bfe9fcf43e.pom
+|   |                       |           
+|   |                       +---fabric-command-api-v2-4b5d3c0a-client
+|   |                       |   \---2.4.7+6b42a6003e
+|   |                       |           fabric-command-api-v2-4b5d3c0a-client-2.4.7+6b42a6003e-sources.jar
+|   |                       |           fabric-command-api-v2-4b5d3c0a-client-2.4.7+6b42a6003e.jar
+|   |                       |           fabric-command-api-v2-4b5d3c0a-client-2.4.7+6b42a6003e.pom
+|   |                       |           
+|   |                       +---fabric-command-api-v2-4b5d3c0a-common
+|   |                       |   \---2.4.7+6b42a6003e
+|   |                       |           fabric-command-api-v2-4b5d3c0a-common-2.4.7+6b42a6003e-sources.jar
+|   |                       |           fabric-command-api-v2-4b5d3c0a-common-2.4.7+6b42a6003e.jar
+|   |                       |           fabric-command-api-v2-4b5d3c0a-common-2.4.7+6b42a6003e.pom
+|   |                       |           
+|   |                       +---fabric-content-registries-v0-4b5d3c0a-common
+|   |                       |   \---10.2.14+4fc5413f3e
+|   |                       |           fabric-content-registries-v0-4b5d3c0a-common-10.2.14+4fc5413f3e-sources.jar
+|   |                       |           fabric-content-registries-v0-4b5d3c0a-common-10.2.14+4fc5413f3e.jar
+|   |                       |           fabric-content-registries-v0-4b5d3c0a-common-10.2.14+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-convention-tags-v1-4b5d3c0a-common
+|   |                       |   \---2.1.55+7f945d5b3e
+|   |                       |           fabric-convention-tags-v1-4b5d3c0a-common-2.1.55+7f945d5b3e-sources.jar
+|   |                       |           fabric-convention-tags-v1-4b5d3c0a-common-2.1.55+7f945d5b3e.jar
+|   |                       |           fabric-convention-tags-v1-4b5d3c0a-common-2.1.55+7f945d5b3e.pom
+|   |                       |           
+|   |                       +---fabric-convention-tags-v2-4b5d3c0a-common
+|   |                       |   \---2.17.3+8ef948ba3e
+|   |                       |           fabric-convention-tags-v2-4b5d3c0a-common-2.17.3+8ef948ba3e-sources.jar
+|   |                       |           fabric-convention-tags-v2-4b5d3c0a-common-2.17.3+8ef948ba3e.jar
+|   |                       |           fabric-convention-tags-v2-4b5d3c0a-common-2.17.3+8ef948ba3e.pom
+|   |                       |           
+|   |                       +---fabric-crash-report-info-v1-4b5d3c0a-common
+|   |                       |   \---0.3.23+4ebb5c083e
+|   |                       |           fabric-crash-report-info-v1-4b5d3c0a-common-0.3.23+4ebb5c083e-sources.jar
+|   |                       |           fabric-crash-report-info-v1-4b5d3c0a-common-0.3.23+4ebb5c083e.jar
+|   |                       |           fabric-crash-report-info-v1-4b5d3c0a-common-0.3.23+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-data-attachment-api-v1-4b5d3c0a-client
+|   |                       |   \---1.8.43+1fb1cde93e
+|   |                       |           fabric-data-attachment-api-v1-4b5d3c0a-client-1.8.43+1fb1cde93e-sources.jar
+|   |                       |           fabric-data-attachment-api-v1-4b5d3c0a-client-1.8.43+1fb1cde93e.jar
+|   |                       |           fabric-data-attachment-api-v1-4b5d3c0a-client-1.8.43+1fb1cde93e.pom
+|   |                       |           
+|   |                       +---fabric-data-attachment-api-v1-4b5d3c0a-common
+|   |                       |   \---1.8.43+1fb1cde93e
+|   |                       |           fabric-data-attachment-api-v1-4b5d3c0a-common-1.8.43+1fb1cde93e-sources.jar
+|   |                       |           fabric-data-attachment-api-v1-4b5d3c0a-common-1.8.43+1fb1cde93e.jar
+|   |                       |           fabric-data-attachment-api-v1-4b5d3c0a-common-1.8.43+1fb1cde93e.pom
+|   |                       |           
+|   |                       +---fabric-data-generation-api-v1-4b5d3c0a-client
+|   |                       |   \---23.3.0+ae1056283e
+|   |                       |           fabric-data-generation-api-v1-4b5d3c0a-client-23.3.0+ae1056283e-sources.jar
+|   |                       |           fabric-data-generation-api-v1-4b5d3c0a-client-23.3.0+ae1056283e.jar
+|   |                       |           fabric-data-generation-api-v1-4b5d3c0a-client-23.3.0+ae1056283e.pom
+|   |                       |           
+|   |                       +---fabric-data-generation-api-v1-4b5d3c0a-common
+|   |                       |   \---23.3.0+ae1056283e
+|   |                       |           fabric-data-generation-api-v1-4b5d3c0a-common-23.3.0+ae1056283e-sources.jar
+|   |                       |           fabric-data-generation-api-v1-4b5d3c0a-common-23.3.0+ae1056283e.jar
+|   |                       |           fabric-data-generation-api-v1-4b5d3c0a-common-23.3.0+ae1056283e.pom
+|   |                       |           
+|   |                       +---fabric-dimensions-v1-4b5d3c0a-common
+|   |                       |   \---4.0.28+4fc5413f3e
+|   |                       |           fabric-dimensions-v1-4b5d3c0a-common-4.0.28+4fc5413f3e-sources.jar
+|   |                       |           fabric-dimensions-v1-4b5d3c0a-common-4.0.28+4fc5413f3e.jar
+|   |                       |           fabric-dimensions-v1-4b5d3c0a-common-4.0.28+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-entity-events-v1-4b5d3c0a-common
+|   |                       |   \---3.0.5+4ebb5c083e
+|   |                       |           fabric-entity-events-v1-4b5d3c0a-common-3.0.5+4ebb5c083e-sources.jar
+|   |                       |           fabric-entity-events-v1-4b5d3c0a-common-3.0.5+4ebb5c083e.jar
+|   |                       |           fabric-entity-events-v1-4b5d3c0a-common-3.0.5+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-events-interaction-v0-4b5d3c0a-client
+|   |                       |   \---4.0.44+1fb1cde93e
+|   |                       |           fabric-events-interaction-v0-4b5d3c0a-client-4.0.44+1fb1cde93e-sources.jar
+|   |                       |           fabric-events-interaction-v0-4b5d3c0a-client-4.0.44+1fb1cde93e.jar
+|   |                       |           fabric-events-interaction-v0-4b5d3c0a-client-4.0.44+1fb1cde93e.pom
+|   |                       |           
+|   |                       +---fabric-events-interaction-v0-4b5d3c0a-common
+|   |                       |   \---4.0.44+1fb1cde93e
+|   |                       |           fabric-events-interaction-v0-4b5d3c0a-common-4.0.44+1fb1cde93e-sources.jar
+|   |                       |           fabric-events-interaction-v0-4b5d3c0a-common-4.0.44+1fb1cde93e.jar
+|   |                       |           fabric-events-interaction-v0-4b5d3c0a-common-4.0.44+1fb1cde93e.pom
+|   |                       |           
+|   |                       +---fabric-game-rule-api-v1-4b5d3c0a-client
+|   |                       |   \---2.0.3+4fc5413f3e
+|   |                       |           fabric-game-rule-api-v1-4b5d3c0a-client-2.0.3+4fc5413f3e-sources.jar
+|   |                       |           fabric-game-rule-api-v1-4b5d3c0a-client-2.0.3+4fc5413f3e.jar
+|   |                       |           fabric-game-rule-api-v1-4b5d3c0a-client-2.0.3+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-game-rule-api-v1-4b5d3c0a-common
+|   |                       |   \---2.0.3+4fc5413f3e
+|   |                       |           fabric-game-rule-api-v1-4b5d3c0a-common-2.0.3+4fc5413f3e-sources.jar
+|   |                       |           fabric-game-rule-api-v1-4b5d3c0a-common-2.0.3+4fc5413f3e.jar
+|   |                       |           fabric-game-rule-api-v1-4b5d3c0a-common-2.0.3+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-gametest-api-v1-4b5d3c0a-common
+|   |                       |   \---3.1.27+4fc5413f3e
+|   |                       |           fabric-gametest-api-v1-4b5d3c0a-common-3.1.27+4fc5413f3e-sources.jar
+|   |                       |           fabric-gametest-api-v1-4b5d3c0a-common-3.1.27+4fc5413f3e.jar
+|   |                       |           fabric-gametest-api-v1-4b5d3c0a-common-3.1.27+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-item-api-v1-4b5d3c0a-client
+|   |                       |   \---11.5.20+d0c46b9e3e
+|   |                       |           fabric-item-api-v1-4b5d3c0a-client-11.5.20+d0c46b9e3e-sources.jar
+|   |                       |           fabric-item-api-v1-4b5d3c0a-client-11.5.20+d0c46b9e3e.jar
+|   |                       |           fabric-item-api-v1-4b5d3c0a-client-11.5.20+d0c46b9e3e.pom
+|   |                       |           
+|   |                       +---fabric-item-api-v1-4b5d3c0a-common
+|   |                       |   \---11.5.20+d0c46b9e3e
+|   |                       |           fabric-item-api-v1-4b5d3c0a-common-11.5.20+d0c46b9e3e-sources.jar
+|   |                       |           fabric-item-api-v1-4b5d3c0a-common-11.5.20+d0c46b9e3e.jar
+|   |                       |           fabric-item-api-v1-4b5d3c0a-common-11.5.20+d0c46b9e3e.pom
+|   |                       |           
+|   |                       +---fabric-item-group-api-v1-4b5d3c0a-client
+|   |                       |   \---4.2.36+4fc5413f3e
+|   |                       |           fabric-item-group-api-v1-4b5d3c0a-client-4.2.36+4fc5413f3e-sources.jar
+|   |                       |           fabric-item-group-api-v1-4b5d3c0a-client-4.2.36+4fc5413f3e.jar
+|   |                       |           fabric-item-group-api-v1-4b5d3c0a-client-4.2.36+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-item-group-api-v1-4b5d3c0a-common
+|   |                       |   \---4.2.36+4fc5413f3e
+|   |                       |           fabric-item-group-api-v1-4b5d3c0a-common-4.2.36+4fc5413f3e-sources.jar
+|   |                       |           fabric-item-group-api-v1-4b5d3c0a-common-4.2.36+4fc5413f3e.jar
+|   |                       |           fabric-item-group-api-v1-4b5d3c0a-common-4.2.36+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-key-binding-api-v1-4b5d3c0a-client
+|   |                       |   \---1.1.7+4fc5413f53
+|   |                       |           fabric-key-binding-api-v1-4b5d3c0a-client-1.1.7+4fc5413f53-sources.jar
+|   |                       |           fabric-key-binding-api-v1-4b5d3c0a-client-1.1.7+4fc5413f53.jar
+|   |                       |           fabric-key-binding-api-v1-4b5d3c0a-client-1.1.7+4fc5413f53.pom
+|   |                       |           
+|   |                       +---fabric-lifecycle-events-v1-4b5d3c0a-client
+|   |                       |   \---2.6.15+4ebb5c0853
+|   |                       |           fabric-lifecycle-events-v1-4b5d3c0a-client-2.6.15+4ebb5c0853-sources.jar
+|   |                       |           fabric-lifecycle-events-v1-4b5d3c0a-client-2.6.15+4ebb5c0853.jar
+|   |                       |           fabric-lifecycle-events-v1-4b5d3c0a-client-2.6.15+4ebb5c0853.pom
+|   |                       |           
+|   |                       +---fabric-lifecycle-events-v1-4b5d3c0a-common
+|   |                       |   \---2.6.15+4ebb5c0853
+|   |                       |           fabric-lifecycle-events-v1-4b5d3c0a-common-2.6.15+4ebb5c0853-sources.jar
+|   |                       |           fabric-lifecycle-events-v1-4b5d3c0a-common-2.6.15+4ebb5c0853.jar
+|   |                       |           fabric-lifecycle-events-v1-4b5d3c0a-common-2.6.15+4ebb5c0853.pom
+|   |                       |           
+|   |                       +---fabric-loot-api-v2-4b5d3c0a-common
+|   |                       |   \---3.0.73+3f89f5a53e
+|   |                       |           fabric-loot-api-v2-4b5d3c0a-common-3.0.73+3f89f5a53e-sources.jar
+|   |                       |           fabric-loot-api-v2-4b5d3c0a-common-3.0.73+3f89f5a53e.jar
+|   |                       |           fabric-loot-api-v2-4b5d3c0a-common-3.0.73+3f89f5a53e.pom
+|   |                       |           
+|   |                       +---fabric-loot-api-v3-4b5d3c0a-common
+|   |                       |   \---2.0.20+78c8b4663e
+|   |                       |           fabric-loot-api-v3-4b5d3c0a-common-2.0.20+78c8b4663e-sources.jar
+|   |                       |           fabric-loot-api-v3-4b5d3c0a-common-2.0.20+78c8b4663e.jar
+|   |                       |           fabric-loot-api-v3-4b5d3c0a-common-2.0.20+78c8b4663e.pom
+|   |                       |           
+|   |                       +---fabric-message-api-v1-4b5d3c0a-client
+|   |                       |   \---6.1.12+4ebb5c083e
+|   |                       |           fabric-message-api-v1-4b5d3c0a-client-6.1.12+4ebb5c083e-sources.jar
+|   |                       |           fabric-message-api-v1-4b5d3c0a-client-6.1.12+4ebb5c083e.jar
+|   |                       |           fabric-message-api-v1-4b5d3c0a-client-6.1.12+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-message-api-v1-4b5d3c0a-common
+|   |                       |   \---6.1.12+4ebb5c083e
+|   |                       |           fabric-message-api-v1-4b5d3c0a-common-6.1.12+4ebb5c083e-sources.jar
+|   |                       |           fabric-message-api-v1-4b5d3c0a-common-6.1.12+4ebb5c083e.jar
+|   |                       |           fabric-message-api-v1-4b5d3c0a-common-6.1.12+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-networking-api-v1-4b5d3c0a-client
+|   |                       |   \---5.1.5+ae1e07683e
+|   |                       |           fabric-networking-api-v1-4b5d3c0a-client-5.1.5+ae1e07683e-sources.jar
+|   |                       |           fabric-networking-api-v1-4b5d3c0a-client-5.1.5+ae1e07683e.jar
+|   |                       |           fabric-networking-api-v1-4b5d3c0a-client-5.1.5+ae1e07683e.pom
+|   |                       |           
+|   |                       +---fabric-networking-api-v1-4b5d3c0a-common
+|   |                       |   \---5.1.5+ae1e07683e
+|   |                       |           fabric-networking-api-v1-4b5d3c0a-common-5.1.5+ae1e07683e-sources.jar
+|   |                       |           fabric-networking-api-v1-4b5d3c0a-common-5.1.5+ae1e07683e.jar
+|   |                       |           fabric-networking-api-v1-4b5d3c0a-common-5.1.5+ae1e07683e.pom
+|   |                       |           
+|   |                       +---fabric-object-builder-api-v1-4b5d3c0a-client
+|   |                       |   \---21.1.38+4fc5413f3e
+|   |                       |           fabric-object-builder-api-v1-4b5d3c0a-client-21.1.38+4fc5413f3e-sources.jar
+|   |                       |           fabric-object-builder-api-v1-4b5d3c0a-client-21.1.38+4fc5413f3e.jar
+|   |                       |           fabric-object-builder-api-v1-4b5d3c0a-client-21.1.38+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-object-builder-api-v1-4b5d3c0a-common
+|   |                       |   \---21.1.38+4fc5413f3e
+|   |                       |           fabric-object-builder-api-v1-4b5d3c0a-common-21.1.38+4fc5413f3e-sources.jar
+|   |                       |           fabric-object-builder-api-v1-4b5d3c0a-common-21.1.38+4fc5413f3e.jar
+|   |                       |           fabric-object-builder-api-v1-4b5d3c0a-common-21.1.38+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-particles-v1-4b5d3c0a-client
+|   |                       |   \---4.2.11+4fc5413f3e
+|   |                       |           fabric-particles-v1-4b5d3c0a-client-4.2.11+4fc5413f3e-sources.jar
+|   |                       |           fabric-particles-v1-4b5d3c0a-client-4.2.11+4fc5413f3e.jar
+|   |                       |           fabric-particles-v1-4b5d3c0a-client-4.2.11+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-particles-v1-4b5d3c0a-common
+|   |                       |   \---4.2.11+4fc5413f3e
+|   |                       |           fabric-particles-v1-4b5d3c0a-common-4.2.11+4fc5413f3e-sources.jar
+|   |                       |           fabric-particles-v1-4b5d3c0a-common-4.2.11+4fc5413f3e.jar
+|   |                       |           fabric-particles-v1-4b5d3c0a-common-4.2.11+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-recipe-api-v1-4b5d3c0a-client
+|   |                       |   \---8.2.3+4ebb5c083e
+|   |                       |           fabric-recipe-api-v1-4b5d3c0a-client-8.2.3+4ebb5c083e-sources.jar
+|   |                       |           fabric-recipe-api-v1-4b5d3c0a-client-8.2.3+4ebb5c083e.jar
+|   |                       |           fabric-recipe-api-v1-4b5d3c0a-client-8.2.3+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-recipe-api-v1-4b5d3c0a-common
+|   |                       |   \---8.2.3+4ebb5c083e
+|   |                       |           fabric-recipe-api-v1-4b5d3c0a-common-8.2.3+4ebb5c083e-sources.jar
+|   |                       |           fabric-recipe-api-v1-4b5d3c0a-common-8.2.3+4ebb5c083e.jar
+|   |                       |           fabric-recipe-api-v1-4b5d3c0a-common-8.2.3+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-registry-sync-v0-4b5d3c0a-client
+|   |                       |   \---6.2.4+4ebb5c083e
+|   |                       |           fabric-registry-sync-v0-4b5d3c0a-client-6.2.4+4ebb5c083e-sources.jar
+|   |                       |           fabric-registry-sync-v0-4b5d3c0a-client-6.2.4+4ebb5c083e.jar
+|   |                       |           fabric-registry-sync-v0-4b5d3c0a-client-6.2.4+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-registry-sync-v0-4b5d3c0a-common
+|   |                       |   \---6.2.4+4ebb5c083e
+|   |                       |           fabric-registry-sync-v0-4b5d3c0a-common-6.2.4+4ebb5c083e-sources.jar
+|   |                       |           fabric-registry-sync-v0-4b5d3c0a-common-6.2.4+4ebb5c083e.jar
+|   |                       |           fabric-registry-sync-v0-4b5d3c0a-common-6.2.4+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-rendering-fluids-v1-4b5d3c0a-client
+|   |                       |   \---3.1.43+4ebb5c083e
+|   |                       |           fabric-rendering-fluids-v1-4b5d3c0a-client-3.1.43+4ebb5c083e-sources.jar
+|   |                       |           fabric-rendering-fluids-v1-4b5d3c0a-client-3.1.43+4ebb5c083e.jar
+|   |                       |           fabric-rendering-fluids-v1-4b5d3c0a-client-3.1.43+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-rendering-fluids-v1-4b5d3c0a-common
+|   |                       |   \---3.1.43+4ebb5c083e
+|   |                       |           fabric-rendering-fluids-v1-4b5d3c0a-common-3.1.43+4ebb5c083e-sources.jar
+|   |                       |           fabric-rendering-fluids-v1-4b5d3c0a-common-3.1.43+4ebb5c083e.jar
+|   |                       |           fabric-rendering-fluids-v1-4b5d3c0a-common-3.1.43+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-rendering-v1-4b5d3c0a-client
+|   |                       |   \---16.2.6+1fb1cde93e
+|   |                       |           fabric-rendering-v1-4b5d3c0a-client-16.2.6+1fb1cde93e-sources.jar
+|   |                       |           fabric-rendering-v1-4b5d3c0a-client-16.2.6+1fb1cde93e.jar
+|   |                       |           fabric-rendering-v1-4b5d3c0a-client-16.2.6+1fb1cde93e.pom
+|   |                       |           
+|   |                       +---fabric-resource-conditions-api-v1-4b5d3c0a-common
+|   |                       |   \---5.0.35+4fc5413f3e
+|   |                       |           fabric-resource-conditions-api-v1-4b5d3c0a-common-5.0.35+4fc5413f3e-sources.jar
+|   |                       |           fabric-resource-conditions-api-v1-4b5d3c0a-common-5.0.35+4fc5413f3e.jar
+|   |                       |           fabric-resource-conditions-api-v1-4b5d3c0a-common-5.0.35+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-resource-loader-v0-4b5d3c0a-common
+|   |                       |   \---3.3.4+4fc5413f53
+|   |                       |           fabric-resource-loader-v0-4b5d3c0a-common-3.3.4+4fc5413f53-sources.jar
+|   |                       |           fabric-resource-loader-v0-4b5d3c0a-common-3.3.4+4fc5413f53.jar
+|   |                       |           fabric-resource-loader-v0-4b5d3c0a-common-3.3.4+4fc5413f53.pom
+|   |                       |           
+|   |                       +---fabric-resource-loader-v1-4b5d3c0a-client
+|   |                       |   \---1.0.10+78c8b46653
+|   |                       |           fabric-resource-loader-v1-4b5d3c0a-client-1.0.10+78c8b46653-sources.jar
+|   |                       |           fabric-resource-loader-v1-4b5d3c0a-client-1.0.10+78c8b46653.jar
+|   |                       |           fabric-resource-loader-v1-4b5d3c0a-client-1.0.10+78c8b46653.pom
+|   |                       |           
+|   |                       +---fabric-resource-loader-v1-4b5d3c0a-common
+|   |                       |   \---1.0.10+78c8b46653
+|   |                       |           fabric-resource-loader-v1-4b5d3c0a-common-1.0.10+78c8b46653-sources.jar
+|   |                       |           fabric-resource-loader-v1-4b5d3c0a-common-1.0.10+78c8b46653.jar
+|   |                       |           fabric-resource-loader-v1-4b5d3c0a-common-1.0.10+78c8b46653.pom
+|   |                       |           
+|   |                       +---fabric-screen-api-v1-4b5d3c0a-client
+|   |                       |   \---3.1.7+4ebb5c0853
+|   |                       |           fabric-screen-api-v1-4b5d3c0a-client-3.1.7+4ebb5c0853-sources.jar
+|   |                       |           fabric-screen-api-v1-4b5d3c0a-client-3.1.7+4ebb5c0853.jar
+|   |                       |           fabric-screen-api-v1-4b5d3c0a-client-3.1.7+4ebb5c0853.pom
+|   |                       |           
+|   |                       +---fabric-screen-handler-api-v1-4b5d3c0a-client
+|   |                       |   \---1.3.160+4fc5413f3e
+|   |                       |           fabric-screen-handler-api-v1-4b5d3c0a-client-1.3.160+4fc5413f3e-sources.jar
+|   |                       |           fabric-screen-handler-api-v1-4b5d3c0a-client-1.3.160+4fc5413f3e.jar
+|   |                       |           fabric-screen-handler-api-v1-4b5d3c0a-client-1.3.160+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-screen-handler-api-v1-4b5d3c0a-common
+|   |                       |   \---1.3.160+4fc5413f3e
+|   |                       |           fabric-screen-handler-api-v1-4b5d3c0a-common-1.3.160+4fc5413f3e-sources.jar
+|   |                       |           fabric-screen-handler-api-v1-4b5d3c0a-common-1.3.160+4fc5413f3e.jar
+|   |                       |           fabric-screen-handler-api-v1-4b5d3c0a-common-1.3.160+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-serialization-api-v1-4b5d3c0a-common
+|   |                       |   \---1.0.5+4ebb5c083e
+|   |                       |           fabric-serialization-api-v1-4b5d3c0a-common-1.0.5+4ebb5c083e-sources.jar
+|   |                       |           fabric-serialization-api-v1-4b5d3c0a-common-1.0.5+4ebb5c083e.jar
+|   |                       |           fabric-serialization-api-v1-4b5d3c0a-common-1.0.5+4ebb5c083e.pom
+|   |                       |           
+|   |                       +---fabric-sound-api-v1-4b5d3c0a-client
+|   |                       |   \---1.0.51+4fc5413f3e
+|   |                       |           fabric-sound-api-v1-4b5d3c0a-client-1.0.51+4fc5413f3e-sources.jar
+|   |                       |           fabric-sound-api-v1-4b5d3c0a-client-1.0.51+4fc5413f3e.jar
+|   |                       |           fabric-sound-api-v1-4b5d3c0a-client-1.0.51+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-tag-api-v1-4b5d3c0a-client
+|   |                       |   \---1.2.20+4fc5413f3e
+|   |                       |           fabric-tag-api-v1-4b5d3c0a-client-1.2.20+4fc5413f3e-sources.jar
+|   |                       |           fabric-tag-api-v1-4b5d3c0a-client-1.2.20+4fc5413f3e.jar
+|   |                       |           fabric-tag-api-v1-4b5d3c0a-client-1.2.20+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-tag-api-v1-4b5d3c0a-common
+|   |                       |   \---1.2.20+4fc5413f3e
+|   |                       |           fabric-tag-api-v1-4b5d3c0a-common-1.2.20+4fc5413f3e-sources.jar
+|   |                       |           fabric-tag-api-v1-4b5d3c0a-common-1.2.20+4fc5413f3e.jar
+|   |                       |           fabric-tag-api-v1-4b5d3c0a-common-1.2.20+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-transfer-api-v1-4b5d3c0a-client
+|   |                       |   \---6.0.24+4fc5413f3e
+|   |                       |           fabric-transfer-api-v1-4b5d3c0a-client-6.0.24+4fc5413f3e-sources.jar
+|   |                       |           fabric-transfer-api-v1-4b5d3c0a-client-6.0.24+4fc5413f3e.jar
+|   |                       |           fabric-transfer-api-v1-4b5d3c0a-client-6.0.24+4fc5413f3e.pom
+|   |                       |           
+|   |                       +---fabric-transfer-api-v1-4b5d3c0a-common
+|   |                       |   \---6.0.24+4fc5413f3e
+|   |                       |           fabric-transfer-api-v1-4b5d3c0a-common-6.0.24+4fc5413f3e-sources.jar
+|   |                       |           fabric-transfer-api-v1-4b5d3c0a-common-6.0.24+4fc5413f3e.jar
+|   |                       |           fabric-transfer-api-v1-4b5d3c0a-common-6.0.24+4fc5413f3e.pom
+|   |                       |           
+|   |                       \---fabric-transitive-access-wideners-v1-4b5d3c0a-common
+|   |                           \---7.0.8+0107c3da3e
+|   |                                   fabric-transitive-access-wideners-v1-4b5d3c0a-common-7.0.8+0107c3da3e-sources.jar
+|   |                                   fabric-transitive-access-wideners-v1-4b5d3c0a-common-7.0.8+0107c3da3e.jar
+|   |                                   fabric-transitive-access-wideners-v1-4b5d3c0a-common-7.0.8+0107c3da3e.pom
+|   |                                   
+|   \---vcs-1
+|           gc.properties
+|           
++---build
+|   +---classes
+|   |   \---java
+|   |       +---client
+|   |       |   \---com
+|   |       |       \---somnium
+|   |       |           \---mod
+|   |       |               \---client
+|   |       |                       DreamObjectiveHudRenderer$DreamHudState.class
+|   |       |                       DreamObjectiveHudRenderer.class
+|   |       |                       MirrorReflectionRenderer$MirrorRenderState.class
+|   |       |                       MirrorReflectionRenderer.class
+|   |       |                       NightmarePlaceholderRenderer$NightmareRenderState.class
+|   |       |                       NightmarePlaceholderRenderer.class
+|   |       |                       SanityHudRenderer.class
+|   |       |                       SomniumClient.class
+|   |       |                       
+|   |       \---main
+|   |           \---com
+|   |               \---somnium
+|   |                   \---mod
+|   |                       |   SomniumMod.class
+|   |                       |   
+|   |                       +---command
+|   |                       |       TestDreamCommand.class
+|   |                       |       
+|   |                       +---dimension
+|   |                       |       ModDimensions.class
+|   |                       |       
+|   |                       +---dream
+|   |                       |       DreamManager$1.class
+|   |                       |       DreamManager$ActiveDream.class
+|   |                       |       DreamManager.class
+|   |                       |       DreamObjectiveType.class
+|   |                       |       DreamRegistry.class
+|   |                       |       DreamType.class
+|   |                       |       
+|   |                       +---entity
+|   |                       |   \---nightmare
+|   |                       |           AbstractNightmareEntity.class
+|   |                       |           BlindBurrowerEntity.class
+|   |                       |           DrownedWretchEntity.class
+|   |                       |           FeralVillagerEntity.class
+|   |                       |           FleshGolemEntity.class
+|   |                       |           LurkingShadeEntity.class
+|   |                       |           MirroredDoubleEntity.class
+|   |                       |           MirrorReflectionEntity.class
+|   |                       |           NightmareAmalgamEntity$Phase.class
+|   |                       |           NightmareAmalgamEntity.class
+|   |                       |           PhantomEelEntity.class
+|   |                       |           ScreamingMinerEntity.class
+|   |                       |           StalkerEntity.class
+|   |                       |           WatcherEntity.class
+|   |                       |           
+|   |                       +---event
+|   |                       |       BleedThroughManager.class
+|   |                       |       
+|   |                       +---item
+|   |                       |       WakingBellItem.class
+|   |                       |       
+|   |                       +---mixin
+|   |                       |       PlayerEntityMixin.class
+|   |                       |       ServerPlayerEntityMixin.class
+|   |                       |       SpawnHelperMixin.class
+|   |                       |       
+|   |                       +---network
+|   |                       |       DreamHudPayload.class
+|   |                       |       SanitySyncPayload.class
+|   |                       |       
+|   |                       +---registry
+|   |                       |       ModEntities.class
+|   |                       |       ModItemGroups.class
+|   |                       |       ModItems.class
+|   |                       |       ModSounds.class
+|   |                       |       
+|   |                       \---sanity
+|   |                               SanityData.class
+|   |                               SanityManager$DreamOutcome.class
+|   |                               SanityManager.class
+|   |                               
+|   +---devlibs
+|   |       somnium-0.1.0-alpha-dev.jar
+|   |       somnium-0.1.0-alpha-sources.jar
+|   |       
+|   +---generated
+|   |   \---sources
+|   |       +---annotationProcessor
+|   |       |   \---java
+|   |       |       +---client
+|   |       |       \---main
+|   |       \---headers
+|   |           \---java
+|   |               +---client
+|   |               \---main
+|   +---libs
+|   |       somnium-0.1.0-alpha-sources.jar
+|   |       somnium-0.1.0-alpha.jar
+|   |       
+|   +---loom-cache
+|   |   \---remapped_working
+|   |           remapped.maven.modrinth-mOgUt4GM-4b5d3c0a-Tyk71iSw.jar
+|   |           remapped.me.shedaniel.cloth-basic-math-4b5d3c0a-0.6.1-sources.jar
+|   |           remapped.me.shedaniel.cloth-basic-math-4b5d3c0a-0.6.1.jar
+|   |           remapped.me.shedaniel.cloth-cloth-config-fabric-4b5d3c0a-21.11.153.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-api-4b5d3c0a-0.139.5+1.21.11-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-api-4b5d3c0a-0.139.5+1.21.11.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-api-base-4b5d3c0a-1.0.5+4ebb5c0853-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-api-base-4b5d3c0a-1.0.5+4ebb5c0853.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-api-lookup-api-v1-4b5d3c0a-1.6.113+1fb1cde93e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-api-lookup-api-v1-4b5d3c0a-1.6.113+1fb1cde93e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-biome-api-v1-4b5d3c0a-17.1.1+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-biome-api-v1-4b5d3c0a-17.1.1+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-block-api-v1-4b5d3c0a-1.1.10+4ebb5c083e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-block-api-v1-4b5d3c0a-1.1.10+4ebb5c083e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-block-view-api-v2-4b5d3c0a-1.0.39+4ebb5c083e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-block-view-api-v2-4b5d3c0a-1.0.39+4ebb5c083e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-block-view-api-v2-4b5d3c0a-1.0.39+4ebb5c083e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-block-view-api-v2-4b5d3c0a-1.0.39+4ebb5c083e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-block-view-api-v2-4b5d3c0a-1.0.39+4ebb5c083e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-block-view-api-v2-4b5d3c0a-1.0.39+4ebb5c083e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-client-gametest-api-v1-4b5d3c0a-4.3.5+bfe9fcf43e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-client-gametest-api-v1-4b5d3c0a-4.3.5+bfe9fcf43e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-command-api-v2-4b5d3c0a-2.4.7+6b42a6003e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-command-api-v2-4b5d3c0a-2.4.7+6b42a6003e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-command-api-v2-4b5d3c0a-2.4.7+6b42a6003e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-command-api-v2-4b5d3c0a-2.4.7+6b42a6003e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-command-api-v2-4b5d3c0a-2.4.7+6b42a6003e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-command-api-v2-4b5d3c0a-2.4.7+6b42a6003e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-content-registries-v0-4b5d3c0a-10.2.14+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-content-registries-v0-4b5d3c0a-10.2.14+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-convention-tags-v1-4b5d3c0a-2.1.55+7f945d5b3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-convention-tags-v1-4b5d3c0a-2.1.55+7f945d5b3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-convention-tags-v2-4b5d3c0a-2.17.3+8ef948ba3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-convention-tags-v2-4b5d3c0a-2.17.3+8ef948ba3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-crash-report-info-v1-4b5d3c0a-0.3.23+4ebb5c083e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-crash-report-info-v1-4b5d3c0a-0.3.23+4ebb5c083e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-data-attachment-api-v1-4b5d3c0a-1.8.43+1fb1cde93e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-data-attachment-api-v1-4b5d3c0a-1.8.43+1fb1cde93e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-data-attachment-api-v1-4b5d3c0a-1.8.43+1fb1cde93e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-data-attachment-api-v1-4b5d3c0a-1.8.43+1fb1cde93e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-data-attachment-api-v1-4b5d3c0a-1.8.43+1fb1cde93e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-data-attachment-api-v1-4b5d3c0a-1.8.43+1fb1cde93e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-data-generation-api-v1-4b5d3c0a-23.3.0+ae1056283e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-data-generation-api-v1-4b5d3c0a-23.3.0+ae1056283e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-data-generation-api-v1-4b5d3c0a-23.3.0+ae1056283e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-data-generation-api-v1-4b5d3c0a-23.3.0+ae1056283e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-data-generation-api-v1-4b5d3c0a-23.3.0+ae1056283e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-data-generation-api-v1-4b5d3c0a-23.3.0+ae1056283e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-dimensions-v1-4b5d3c0a-4.0.28+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-dimensions-v1-4b5d3c0a-4.0.28+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-entity-events-v1-4b5d3c0a-3.0.5+4ebb5c083e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-entity-events-v1-4b5d3c0a-3.0.5+4ebb5c083e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-events-interaction-v0-4b5d3c0a-4.0.44+1fb1cde93e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-events-interaction-v0-4b5d3c0a-4.0.44+1fb1cde93e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-events-interaction-v0-4b5d3c0a-4.0.44+1fb1cde93e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-events-interaction-v0-4b5d3c0a-4.0.44+1fb1cde93e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-events-interaction-v0-4b5d3c0a-4.0.44+1fb1cde93e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-events-interaction-v0-4b5d3c0a-4.0.44+1fb1cde93e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-game-rule-api-v1-4b5d3c0a-2.0.3+4fc5413f3e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-game-rule-api-v1-4b5d3c0a-2.0.3+4fc5413f3e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-game-rule-api-v1-4b5d3c0a-2.0.3+4fc5413f3e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-game-rule-api-v1-4b5d3c0a-2.0.3+4fc5413f3e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-game-rule-api-v1-4b5d3c0a-2.0.3+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-game-rule-api-v1-4b5d3c0a-2.0.3+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-gametest-api-v1-4b5d3c0a-3.1.27+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-gametest-api-v1-4b5d3c0a-3.1.27+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-item-api-v1-4b5d3c0a-11.5.20+d0c46b9e3e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-item-api-v1-4b5d3c0a-11.5.20+d0c46b9e3e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-item-api-v1-4b5d3c0a-11.5.20+d0c46b9e3e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-item-api-v1-4b5d3c0a-11.5.20+d0c46b9e3e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-item-api-v1-4b5d3c0a-11.5.20+d0c46b9e3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-item-api-v1-4b5d3c0a-11.5.20+d0c46b9e3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-item-group-api-v1-4b5d3c0a-4.2.36+4fc5413f3e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-item-group-api-v1-4b5d3c0a-4.2.36+4fc5413f3e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-item-group-api-v1-4b5d3c0a-4.2.36+4fc5413f3e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-item-group-api-v1-4b5d3c0a-4.2.36+4fc5413f3e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-item-group-api-v1-4b5d3c0a-4.2.36+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-item-group-api-v1-4b5d3c0a-4.2.36+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-key-binding-api-v1-4b5d3c0a-1.1.7+4fc5413f53-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-key-binding-api-v1-4b5d3c0a-1.1.7+4fc5413f53.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-lifecycle-events-v1-4b5d3c0a-2.6.15+4ebb5c0853-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-lifecycle-events-v1-4b5d3c0a-2.6.15+4ebb5c0853-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-lifecycle-events-v1-4b5d3c0a-2.6.15+4ebb5c0853-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-lifecycle-events-v1-4b5d3c0a-2.6.15+4ebb5c0853-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-lifecycle-events-v1-4b5d3c0a-2.6.15+4ebb5c0853-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-lifecycle-events-v1-4b5d3c0a-2.6.15+4ebb5c0853.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-loot-api-v2-4b5d3c0a-3.0.73+3f89f5a53e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-loot-api-v2-4b5d3c0a-3.0.73+3f89f5a53e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-loot-api-v3-4b5d3c0a-2.0.20+78c8b4663e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-loot-api-v3-4b5d3c0a-2.0.20+78c8b4663e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-message-api-v1-4b5d3c0a-6.1.12+4ebb5c083e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-message-api-v1-4b5d3c0a-6.1.12+4ebb5c083e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-message-api-v1-4b5d3c0a-6.1.12+4ebb5c083e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-message-api-v1-4b5d3c0a-6.1.12+4ebb5c083e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-message-api-v1-4b5d3c0a-6.1.12+4ebb5c083e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-message-api-v1-4b5d3c0a-6.1.12+4ebb5c083e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-networking-api-v1-4b5d3c0a-5.1.5+ae1e07683e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-networking-api-v1-4b5d3c0a-5.1.5+ae1e07683e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-networking-api-v1-4b5d3c0a-5.1.5+ae1e07683e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-networking-api-v1-4b5d3c0a-5.1.5+ae1e07683e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-networking-api-v1-4b5d3c0a-5.1.5+ae1e07683e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-networking-api-v1-4b5d3c0a-5.1.5+ae1e07683e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-object-builder-api-v1-4b5d3c0a-21.1.38+4fc5413f3e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-object-builder-api-v1-4b5d3c0a-21.1.38+4fc5413f3e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-object-builder-api-v1-4b5d3c0a-21.1.38+4fc5413f3e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-object-builder-api-v1-4b5d3c0a-21.1.38+4fc5413f3e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-object-builder-api-v1-4b5d3c0a-21.1.38+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-object-builder-api-v1-4b5d3c0a-21.1.38+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-particles-v1-4b5d3c0a-4.2.11+4fc5413f3e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-particles-v1-4b5d3c0a-4.2.11+4fc5413f3e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-particles-v1-4b5d3c0a-4.2.11+4fc5413f3e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-particles-v1-4b5d3c0a-4.2.11+4fc5413f3e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-particles-v1-4b5d3c0a-4.2.11+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-particles-v1-4b5d3c0a-4.2.11+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-recipe-api-v1-4b5d3c0a-8.2.3+4ebb5c083e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-recipe-api-v1-4b5d3c0a-8.2.3+4ebb5c083e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-recipe-api-v1-4b5d3c0a-8.2.3+4ebb5c083e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-recipe-api-v1-4b5d3c0a-8.2.3+4ebb5c083e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-recipe-api-v1-4b5d3c0a-8.2.3+4ebb5c083e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-recipe-api-v1-4b5d3c0a-8.2.3+4ebb5c083e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-registry-sync-v0-4b5d3c0a-6.2.4+4ebb5c083e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-registry-sync-v0-4b5d3c0a-6.2.4+4ebb5c083e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-registry-sync-v0-4b5d3c0a-6.2.4+4ebb5c083e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-registry-sync-v0-4b5d3c0a-6.2.4+4ebb5c083e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-registry-sync-v0-4b5d3c0a-6.2.4+4ebb5c083e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-registry-sync-v0-4b5d3c0a-6.2.4+4ebb5c083e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-rendering-fluids-v1-4b5d3c0a-3.1.43+4ebb5c083e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-rendering-fluids-v1-4b5d3c0a-3.1.43+4ebb5c083e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-rendering-fluids-v1-4b5d3c0a-3.1.43+4ebb5c083e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-rendering-fluids-v1-4b5d3c0a-3.1.43+4ebb5c083e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-rendering-fluids-v1-4b5d3c0a-3.1.43+4ebb5c083e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-rendering-fluids-v1-4b5d3c0a-3.1.43+4ebb5c083e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-rendering-v1-4b5d3c0a-16.2.6+1fb1cde93e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-rendering-v1-4b5d3c0a-16.2.6+1fb1cde93e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-resource-conditions-api-v1-4b5d3c0a-5.0.35+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-resource-conditions-api-v1-4b5d3c0a-5.0.35+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-resource-loader-v0-4b5d3c0a-3.3.4+4fc5413f53-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-resource-loader-v0-4b5d3c0a-3.3.4+4fc5413f53.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-resource-loader-v1-4b5d3c0a-1.0.10+78c8b46653-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-resource-loader-v1-4b5d3c0a-1.0.10+78c8b46653-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-resource-loader-v1-4b5d3c0a-1.0.10+78c8b46653-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-resource-loader-v1-4b5d3c0a-1.0.10+78c8b46653-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-resource-loader-v1-4b5d3c0a-1.0.10+78c8b46653-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-resource-loader-v1-4b5d3c0a-1.0.10+78c8b46653.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-screen-api-v1-4b5d3c0a-3.1.7+4ebb5c0853-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-screen-api-v1-4b5d3c0a-3.1.7+4ebb5c0853.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-screen-handler-api-v1-4b5d3c0a-1.3.160+4fc5413f3e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-screen-handler-api-v1-4b5d3c0a-1.3.160+4fc5413f3e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-screen-handler-api-v1-4b5d3c0a-1.3.160+4fc5413f3e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-screen-handler-api-v1-4b5d3c0a-1.3.160+4fc5413f3e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-screen-handler-api-v1-4b5d3c0a-1.3.160+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-screen-handler-api-v1-4b5d3c0a-1.3.160+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-serialization-api-v1-4b5d3c0a-1.0.5+4ebb5c083e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-serialization-api-v1-4b5d3c0a-1.0.5+4ebb5c083e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-sound-api-v1-4b5d3c0a-1.0.51+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-sound-api-v1-4b5d3c0a-1.0.51+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-tag-api-v1-4b5d3c0a-1.2.20+4fc5413f3e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-tag-api-v1-4b5d3c0a-1.2.20+4fc5413f3e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-tag-api-v1-4b5d3c0a-1.2.20+4fc5413f3e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-tag-api-v1-4b5d3c0a-1.2.20+4fc5413f3e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-tag-api-v1-4b5d3c0a-1.2.20+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-tag-api-v1-4b5d3c0a-1.2.20+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-transfer-api-v1-4b5d3c0a-6.0.24+4fc5413f3e-client-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-transfer-api-v1-4b5d3c0a-6.0.24+4fc5413f3e-client.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-transfer-api-v1-4b5d3c0a-6.0.24+4fc5413f3e-common-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-transfer-api-v1-4b5d3c0a-6.0.24+4fc5413f3e-common.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-transfer-api-v1-4b5d3c0a-6.0.24+4fc5413f3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-transfer-api-v1-4b5d3c0a-6.0.24+4fc5413f3e.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-transitive-access-wideners-v1-4b5d3c0a-7.0.8+0107c3da3e-sources.jar
+|   |           remapped.net.fabricmc.fabric-api-fabric-transitive-access-wideners-v1-4b5d3c0a-7.0.8+0107c3da3e.jar
+|   |           
+|   +---processIncludeJars
+|   +---reports
+|   |   \---problems
+|   |           problems-report.html
+|   |           
+|   +---resources
+|   |   \---main
+|   |       |   fabric.mod.json
+|   |       |   somnium.mixins.json
+|   |       |   
+|   |       +---assets
+|   |       |   \---somnium
+|   |       |       +---items
+|   |       |       |       clarity_shard.json
+|   |       |       |       dream_catcher.json
+|   |       |       |       nightmare_essence.json
+|   |       |       |       waking_bell.json
+|   |       |       |       
+|   |       |       +---lang
+|   |       |       |       en_us.json
+|   |       |       |       ru_ru.json
+|   |       |       |       
+|   |       |       +---models
+|   |       |       |   \---item
+|   |       |       |           clarity_shard.json
+|   |       |       |           dream_catcher.json
+|   |       |       |           nightmare_essence.json
+|   |       |       |           waking_bell.json
+|   |       |       |           
+|   |       |       \---textures
+|   |       |           \---item
+|   |       |                   clarity_shard.png
+|   |       |                   dream_catcher.png
+|   |       |                   nightmare_essence.png
+|   |       |                   waking_bell.png
+|   |       |                   
+|   |       \---data
+|   |           \---somnium
+|   |               +---dimension
+|   |               |       dream_collapsing_mine.json
+|   |               |       dream_crimson_feast.json
+|   |               |       dream_drowning_city.json
+|   |               |       dream_falling_planks.json
+|   |               |       dream_mirror_room.json
+|   |               |       dream_mirror_wastes.json
+|   |               |       dream_shadow_forest.json
+|   |               |       dream_void_of_eyes.json
+|   |               |       dream_within_dream.json
+|   |               |       
+|   |               +---dimension_type
+|   |               |       dream_dimension_type.json
+|   |               |       
+|   |               +---dream
+|   |               |       collapsing_mine.json
+|   |               |       crimson_feast.json
+|   |               |       dream_within_dream.json
+|   |               |       drowning_city.json
+|   |               |       falling_planks.json
+|   |               |       mirror_room.json
+|   |               |       mirror_wastes.json
+|   |               |       shadow_forest.json
+|   |               |       void_of_eyes.json
+|   |               |       
+|   |               +---recipe
+|   |               |       dream_catcher.json
+|   |               |       waking_bell.json
+|   |               |       
+|   |               \---worldgen
+|   |                   \---biome
+|   \---tmp
+|       +---.cache
+|       |   \---expanded
+|       |       +---zip_0196f314db21ad3908836bcf057e3a09
+|       |       +---zip_037abbcade70cd5c45becef6b542cba6
+|       |       +---zip_0b73fa7ff91e8e8e507b6cd8dacc579c
+|       |       +---zip_0d7558920f1f33b5d6e931baf5d92ebf
+|       |       +---zip_0d952225ff6a6987e654e8c6d036de55
+|       |       +---zip_12022f9afd4d61071d6bcd8b497e9241
+|       |       +---zip_1d25460251ecff8005452e415dc3e785
+|       |       +---zip_219c0af999c823a41c7934a2fb8d7ab2
+|       |       +---zip_21be89ae2f5eaea1266c417a9dc306d8
+|       |       +---zip_221fd1e2ab7ba1520268e3620c2c4e70
+|       |       +---zip_2a4fe692575e484bdfc4c9eb0791a2ac
+|       |       +---zip_2cbe0cefedfc06f5fbcbdb262e028e0b
+|       |       +---zip_39efd769f64e084aaaf787ebe403a214
+|       |       +---zip_3a69d31b3689421b9cf077f2d4d2fddb
+|       |       +---zip_41d8060a608e73f60442ef16a7fd2f33
+|       |       +---zip_43e8cebe13ec62078dd46fa82225e6dc
+|       |       +---zip_45f44c9d2bfb76d70297c065e4e975eb
+|       |       +---zip_4772c2bbee89d4cd3a8c0e103a090432
+|       |       +---zip_47a16a08dd91e1940fb249e407d404d8
+|       |       +---zip_48c3a27777b8534de637cd6e71b3ed69
+|       |       +---zip_4df602e2513ef2fb7ab17c851683cce0
+|       |       +---zip_51e518c13159ba5ce732931a1df96e43
+|       |       +---zip_585d37cfe748d6117bf027c465940606
+|       |       +---zip_6fe6bb0222467410c2622c0ead9b7f55
+|       |       +---zip_74bf6d47637c7824ea7b7c3dc6abf2f7
+|       |       +---zip_75598efe5040cf48d55d6618f36440cb
+|       |       +---zip_75d06df7fc17ff55e5ace7780e08b1ab
+|       |       +---zip_92dccf77cdf695beafebeb4f02933449
+|       |       +---zip_93751a887e494f055641444a7c586d47
+|       |       +---zip_946c319b8c20d5377d0bd4d3f0da7b93
+|       |       +---zip_9936e305c5e8e0fbf85caa99bf6a73dd
+|       |       +---zip_9da1dfe3ffcad1a09173ef90e4ed977c
+|       |       +---zip_9eb4f1d835d122f25d2b8afe214ebf76
+|       |       +---zip_a33de97aabe1ba053c5903210320eec6
+|       |       +---zip_a762b217a1cf6eb3f1c6f481e4dbfde2
+|       |       +---zip_acca35b47633dfb991c7f42946893957
+|       |       +---zip_b2ef1eaa2da70b4a59c4a4b696389a5b
+|       |       +---zip_b359c6b5498d3eb5ebe4ebd8bb7c0bfb
+|       |       +---zip_b8bc86a4c95e8ba923da140ab32abaa3
+|       |       +---zip_c33d5224d165b28e29dd52cceed7e174
+|       |       +---zip_c54df9038c3fbb8725b7dd916b405715
+|       |       +---zip_c5664e2d056d58b3132511aab1b61e16
+|       |       +---zip_cced719248d0b1b0720ccd35ad5b7904
+|       |       +---zip_cedf2243f0a8dbe3184087278cf565ae
+|       |       +---zip_d52808a969db9ce91298c78a71170dff
+|       |       +---zip_d5f2d021d3119d967f07ece572770b73
+|       |       +---zip_d643d996028e1dca74774d271fd3ad3b
+|       |       +---zip_e658883950061db378b2a6b6ee669b95
+|       |       +---zip_ea185e08b07d4ac7cc3e7b957bf61fa4
+|       |       +---zip_ecb2a17702c0f4d77084fbad65aaed6b
+|       |       +---zip_f803cbfb8ce2bcc250cca445483a6426
+|       |       \---zip_fa91552ebb87f3803fcf5595abc86149
+|       +---compileClientJava
+|       |   |   previous-compilation-data.bin
+|       |   |   
+|       |   \---compileTransaction
+|       |       +---backup-dir
+|       |       \---stash-dir
+|       |               MirrorReflectionRenderer$MirrorRenderState.class.uniqueId0
+|       |               MirrorReflectionRenderer.class.uniqueId2
+|       |               SomniumClient.class.uniqueId1
+|       |               
+|       +---compileJava
+|       |   |   previous-compilation-data.bin
+|       |   |   
+|       |   \---compileTransaction
+|       |       +---backup-dir
+|       |       \---stash-dir
+|       |               DreamManager$1.class.uniqueId7
+|       |               DreamManager$ActiveDream.class.uniqueId4
+|       |               DreamManager.class.uniqueId3
+|       |               PlayerEntityMixin.class.uniqueId0
+|       |               ServerPlayerEntityMixin.class.uniqueId2
+|       |               SomniumMod.class.uniqueId5
+|       |               TestDreamCommand.class.uniqueId1
+|       |               WakingBellItem.class.uniqueId6
+|       |               
+|       +---jar
+|       |       MANIFEST.MF
+|       |       
+|       +---remapJar
+|       |       MANIFEST.MF
+|       |       
+|       +---remapSourcesJar
+|       |       MANIFEST.MF
+|       |       
+|       \---sourcesJar
+|               MANIFEST.MF
+|               
++---gradle
+|   \---wrapper
+|           gradle-wrapper.jar
+|           gradle-wrapper.properties
+|           
+\---src
+    +---client
+    |   \---java
+    |       \---com
+    |           \---somnium
+    |               \---mod
+    |                   \---client
+    |                           DreamObjectiveHudRenderer.java
+    |                           MirrorReflectionRenderer.java
+    |                           NightmarePlaceholderRenderer.java
+    |                           SanityHudRenderer.java
+    |                           SomniumClient.java
+    |                           
+    \---main
+        |   java.7z
+        |   
+        +---java
+        |   \---com
+        |       \---somnium
+        |           \---mod
+        |               |   SomniumMod.java
+        |               |   
+        |               +---command
+        |               |       TestDreamCommand.java
+        |               |       
+        |               +---dimension
+        |               |       ModDimensions.java
+        |               |       
+        |               +---dream
+        |               |       DreamManager.java
+        |               |       DreamObjectiveType.java
+        |               |       DreamRegistry.java
+        |               |       DreamType.java
+        |               |       WakeDoorTracker.java
+        |               |       
+        |               +---entity
+        |               |   \---nightmare
+        |               |           AbstractNightmareEntity.java
+        |               |           BlindBurrowerEntity.java
+        |               |           DrownedWretchEntity.java
+        |               |           FeralVillagerEntity.java
+        |               |           FleshGolemEntity.java
+        |               |           LurkingShadeEntity.java
+        |               |           MirroredDoubleEntity.java
+        |               |           MirrorReflectionEntity.java
+        |               |           NightmareAmalgamEntity.java
+        |               |           PhantomEelEntity.java
+        |               |           ScreamingMinerEntity.java
+        |               |           StalkerEntity.java
+        |               |           WatcherEntity.java
+        |               |           
+        |               +---event
+        |               |       BleedThroughManager.java
+        |               |       
+        |               +---item
+        |               |       WakingBellItem.java
+        |               |       
+        |               +---mixin
+        |               |       DoorInteractionMixin.java
+        |               |       PlayerEntityMixin.java
+        |               |       ServerPlayerEntityMixin.java
+        |               |       SpawnHelperMixin.java
+        |               |       
+        |               +---network
+        |               |       DreamHudPayload.java
+        |               |       SanitySyncPayload.java
+        |               |       
+        |               +---registry
+        |               |       ModEntities.java
+        |               |       ModItemGroups.java
+        |               |       ModItems.java
+        |               |       ModSounds.java
+        |               |       
+        |               \---sanity
+        |                       SanityData.java
+        |                       SanityManager.java
+        |                       
+        \---resources
+            |   fabric.mod.json
+            |   somnium.mixins.json
+            |   
+            +---assets
+            |   \---somnium
+            |       +---items
+            |       |       clarity_shard.json
+            |       |       dream_catcher.json
+            |       |       nightmare_essence.json
+            |       |       waking_bell.json
+            |       |       
+            |       +---lang
+            |       |       en_us.json
+            |       |       ru_ru.json
+            |       |       
+            |       +---models
+            |       |   \---item
+            |       |           clarity_shard.json
+            |       |           dream_catcher.json
+            |       |           nightmare_essence.json
+            |       |           waking_bell.json
+            |       |           
+            |       \---textures
+            |           \---item
+            |                   clarity_shard.png
+            |                   dream_catcher.png
+            |                   nightmare_essence.png
+            |                   waking_bell.png
+            |                   
+            \---data
+                \---somnium
+                    +---dimension
+                    |       dream_collapsing_mine.json
+                    |       dream_crimson_feast.json
+                    |       dream_drowning_city.json
+                    |       dream_falling_planks.json
+                    |       dream_mirror_room.json
+                    |       dream_mirror_wastes.json
+                    |       dream_shadow_forest.json
+                    |       dream_void_of_eyes.json
+                    |       dream_within_dream.json
+                    |       
+                    +---dimension_type
+                    |       dream_dimension_type.json
+                    |       
+                    +---dream
+                    |       collapsing_mine.json
+                    |       crimson_feast.json
+                    |       dream_within_dream.json
+                    |       drowning_city.json
+                    |       falling_planks.json
+                    |       mirror_room.json
+                    |       mirror_wastes.json
+                    |       shadow_forest.json
+                    |       void_of_eyes.json
+                    |       
+                    +---recipe
+                    |       dream_catcher.json
+                    |       waking_bell.json
+                    |       
+                    \---worldgen
+                        \---biome

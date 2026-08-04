@@ -1,0 +1,9 @@
+{
+  "display_name_key": "somnium.dream.void_of_eyes",
+  "structure_template": "somnium:void_of_eyes_procedural",
+  "monster_entity_ids": ["somnium:watcher"],
+  "base_weight": 14,
+  "min_sanity_to_appear": 100,
+  "duration_ticks": 4800,
+  "objective": "Отступать к порталу пробуждения, не отрывая взгляда от Наблюдателей."
+}

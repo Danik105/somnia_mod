@@ -1,0 +1,28 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    {
+      "item": "somnium:nightmare_essence"
+    },
+    {
+      "item": "somnium:nightmare_essence"
+    },
+    {
+      "item": "somnium:clarity_shard"
+    },
+    {
+      "item": "minecraft:string"
+    },
+    {
+      "item": "minecraft:string"
+    },
+    {
+      "item": "minecraft:stick"
+    }
+  ],
+  "result": {
+    "id": "somnium:dream_catcher",
+    "count": 1
+  }
+}

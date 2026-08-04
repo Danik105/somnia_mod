@@ -1,0 +1,46 @@
+{
+  "_comment": "Сон 'Падающие доски' - игрок стоит на маленькой платформе 2×2 над бесконечной пустотой. Доски исчезают по одной, падение = пробуждение.",
+  "type": "somnium:dream_dimension_type",
+  "generator": {
+    "type": "minecraft:flat",
+    "settings": {
+      "layers": [
+        { "block": "minecraft:air", "height": 1 }
+      ],
+      "biome": "minecraft:the_void",
+      "structures": {
+        "structures": {}
+      }
+    }
+  },
+  "spawn_overrides": {
+    "creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "monster": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "ambient": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "axolotls": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "underground_water_creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "water_creature": {
+      "probability": 0.0,
+      "spawners": []
+    },
+    "water_ambient": {
+      "probability": 0.0,
+      "spawners": []
+    }
+  }
+}
