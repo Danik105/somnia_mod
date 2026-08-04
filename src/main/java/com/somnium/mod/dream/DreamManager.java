@@ -1152,6 +1152,11 @@ public final class DreamManager {
             }
         }
 
+        // ИСПРАВЛЕНИЕ (утечка per-dream стейта в общем сне): все карты состояния снов
+        // ключуются sessionKey (groupId) — фиксируем ключ ДО выхода из сессии, иначе после
+        // leaveSession() он уже не восстановить (для одиночного игрока sessionKey == playerId).
+        UUID dreamStateKey = sessionKey(player.getUuid());
+
         // ДОБАВЛЕНО: удаляем игрока из активного сеанса сна
         SharedDreamSession.leaveSession(player.getUuid(), active.dreamId());
 
@@ -1226,30 +1231,41 @@ public final class DreamManager {
         WakeDoorTracker.onDreamEnd(player.getUuid());
 
         // ДОБАВЛЕНО (сон "Падающие доски"): очищаем данные о платформе при пробуждении
-        clearFallingPlanksData(player.getUuid());
+        // ИСПРАВЛЕНО: карты платформ ключуются sessionKey — см. dreamStateKey выше
+        clearFallingPlanksData(dreamStateKey);
 
+        // ИСПРАВЛЕНИЕ (утечка per-dream стейта в общем сне): карты состояния снов (стол пира,
+        // лабиринт и т.п.) ключуются sessionKey (groupId), а leaveSession() выше уже отвязал
+        // игрока от группы — поэтому ключ вычисляем заново через sessionKey() НЕЛЬЗЯ, он
+        // вернёт playerId. Для корректной очистки в общем сне используем dreamStateKey,
+        // зафиксированный ДО leaveSession (для одиночного игрока совпадает с playerId).
         // ДОБАВЛЕНО (сон "Зеркальная комната"): очищаем данные о стекле при пробуждении
-        MIRROR_ROOM_GLASS.remove(player.getUuid());
-        MIRROR_GLASS_BREAK_TIME.remove(player.getUuid());
-        MIRROR_ROOM_CORNER.remove(player.getUuid());
+        // (PENDING_MIRROR_INIT намеренно остаётся по playerId — кладётся под UUID игрока)
+        MIRROR_ROOM_GLASS.remove(dreamStateKey);
+        MIRROR_GLASS_BREAK_TIME.remove(dreamStateKey);
+        MIRROR_ROOM_CORNER.remove(dreamStateKey);
         PENDING_MIRROR_INIT.remove(player.getUuid());
 
         // ДОБАВЛЕНО (сон "Тонущий город"): очищаем данные об уровне воды при пробуждении
-        DROWNING_CITY_WATER_LEVEL.remove(player.getUuid());
-        DROWNING_CITY_FILL_QUEUE.remove(player.getUuid());
+        DROWNING_CITY_WATER_LEVEL.remove(dreamStateKey);
+        DROWNING_CITY_FILL_QUEUE.remove(dreamStateKey);
 
         // ДОБАВЛЕНО (сон "Обрушающаяся шахта"): очищаем данные о лабиринте при пробуждении
-        COLLAPSING_MINE_MAZES.remove(player.getUuid());
-        COLLAPSING_MINE_ORIGINS.remove(player.getUuid());
-        MINE_OPENED_PASSAGES.remove(player.getUuid());
-        NEXT_MINE_SHIFT_TICK.remove(player.getUuid());
+        COLLAPSING_MINE_MAZES.remove(dreamStateKey);
+        COLLAPSING_MINE_ORIGINS.remove(dreamStateKey);
+        MINE_OPENED_PASSAGES.remove(dreamStateKey);
+        NEXT_MINE_SHIFT_TICK.remove(dreamStateKey);
 
-        // ДОБАВЛЕНО (сон "Кровавый пир"): очищаем стол, блюдо и счётчик пропусков при пробуждении
-        FEAST_TABLES.remove(player.getUuid());
-        FEAST_DISH_ITEM.remove(player.getUuid());
-        FEAST_DISH_DEADLINE.remove(player.getUuid());
-        NEXT_DISH_TICK.remove(player.getUuid());
-        FEAST_SKIPS.remove(player.getUuid());
+        // ДОБАВЛЕНО (сон "Кровавый пир", редизайн): стол, блюдо, курсы, кубок при пробуждении
+        FEAST_TABLES.remove(dreamStateKey);
+        FEAST_DISH_ITEM.remove(dreamStateKey);
+        FEAST_DISH_TAINTED.remove(dreamStateKey);
+        FEAST_DISH_DEADLINE.remove(dreamStateKey);
+        NEXT_DISH_TICK.remove(dreamStateKey);
+        FEAST_COURSES_DONE.remove(dreamStateKey);
+        FEAST_TOAST_ITEM.remove(dreamStateKey);
+        // Канал тоста — per-player
+        FEAST_TOAST_CHANNEL_END.remove(player.getUuid());
 
         // ДОБАВЛЕНО (сон "Сон-в-сне"): очищаем данные о погоде при пробуждении
         DREAM_WITHIN_DREAM_ORIGINAL_POS.remove(player.getUuid());
@@ -1948,26 +1964,41 @@ public final class DreamManager {
     /** Сколько открытых механикой проходов держим одновременно — лишние зарастают */
     private static final int MINE_MAX_OPEN_PASSAGES = 6;
 
-    // ДОБАВЛЕНО (сон "Кровавый пир", механика "ешь — теряй рассудок, голодай — теряй здоровье"):
-    /** Позиции "тарелок" пиршественного стола для каждого игрока */
+    // ДОБАВЛЕНО (сон "Кровавый пир", редизайн "Последний ужин"):
+    /** Позиции "тарелок" пиршественного стола для каждой сессии */
     private static final Map<UUID, List<BlockPos>> FEAST_TABLES = new HashMap<>();
     /** UUID текущего блюда (ItemEntity) на столе */
     private static final Map<UUID, UUID> FEAST_DISH_ITEM = new HashMap<>();
-    /** Тик, когда нетронутое блюдо "портится" (засчитывается отказ) */
+    /** Тронуто ли текущее блюдо (true = есть опасно, надо отодвинуть) */
+    private static final Map<UUID, Boolean> FEAST_DISH_TAINTED = new HashMap<>();
+    /** Тик, когда нерешённое блюдо убирают гости (обида за невнимание) */
     private static final Map<UUID, Long> FEAST_DISH_DEADLINE = new HashMap<>();
     /** Тик подачи следующего блюда */
     private static final Map<UUID, Long> NEXT_DISH_TICK = new HashMap<>();
-    /** Сколько блюд подряд игрок отверг — растит голод и урон от голода */
-    private static final Map<UUID, Integer> FEAST_SKIPS = new HashMap<>();
-    /** Подача нового блюда каждые ~18 секунд */
-    private static final int FEAST_DISH_INTERVAL = 360;
-    /** Блюдо ждёт на столе 15 секунд, потом "портится" */
-    private static final int FEAST_DISH_LIFETIME = 300;
-    /** Рассудок за съеденное блюдо / за отказ от блюда */
-    private static final float FEAST_EAT_SANITY = -8.0f;
-    private static final float FEAST_SKIP_SANITY = 4.0f;
-    /** Со скольких пропусков подряд голод начинает наносить урон */
-    private static final int FEAST_STARVATION_SKIPS = 3;
+    /** Сколько блюд уже разрешено (отведано или отодвинуто) из FEAST_COURSES */
+    private static final Map<UUID, Integer> FEAST_COURSES_DONE = new HashMap<>();
+    /** UUID Кубка Тоста — финальный выход из сна */
+    private static final Map<UUID, UUID> FEAST_TOAST_ITEM = new HashMap<>();
+    /** Игрок -> тик, когда он допьёт кубок (канал тоста) */
+    private static final Map<UUID, Long> FEAST_TOAST_CHANNEL_END = new HashMap<>();
+    /** Всего блюд за пир — после них подают кубок */
+    private static final int FEAST_COURSES = 5;
+    /** Пауза между блюдами (~15 сек); первая подача через 10 сек */
+    private static final int FEAST_DISH_INTERVAL = 300;
+    private static final int FEAST_FIRST_DISH_DELAY = 200;
+    /** Блюдо ждёт решения игрока 20 секунд, потом гости обиженно убирают его */
+    private static final int FEAST_DISH_LIFETIME = 400;
+    /** Рассудок за исходы блюд: съел свежее / съел тронутое / отодвинул тронутое /
+     *  отодвинул свежее / проигнорировал (гости убрали сами) */
+    private static final float FEAST_EAT_FRESH_SANITY = 3.0f;
+    private static final float FEAST_EAT_TAINTED_SANITY = -6.0f;
+    private static final float FEAST_REFUSE_TAINTED_SANITY = 2.0f;
+    private static final float FEAST_REFUSE_FRESH_SANITY = -2.0f;
+    private static final float FEAST_IGNORED_SANITY = -2.0f;
+    /** Канал тоста — 3 секунды, пока игрок пьёт */
+    private static final int FEAST_TOAST_CHANNEL_TICKS = 60;
+    /** Шанс, что поданное блюдо тронуто */
+    private static final double FEAST_TAINTED_CHANCE = 0.45;
 
     /** ДОБАВЛЕНО: Сон-в-сне - сохранённые блоки чанка для каждого игрока */
     private static final Map<UUID, ChunkSnapshot> DREAM_WITHIN_DREAM_CHUNKS = new HashMap<>();
@@ -2513,45 +2544,55 @@ public final class DreamManager {
     }
 
     /**
-     * ДОБАВЛЕНО (сон "Кровавый пир"): строит пиршественный стол из багровых досок в двух
-     * блоках перед точкой спавна игрока. Каждая доска — "тарелка", на которую тик-хендлер
-     * будет подавать блюда (см. tickCrimsonFeast).
-     */
-    /**
-     * ИЗМЕНЕНО (мультиплеер): теперь принимает sessionKey (groupId) вместо playerId
+     * ДОБАВЛЕНО (сон "Кровавый пир", редизайн "Последний ужин"): строит банкетную сцену —
+     * длинный стол из полированного чернита, за которым по дальней стороне сидят гости-
+     * манекены (стенды с головами иссер-скелетов). Игрок садится напротив них; блюда
+     * подаются на центральную "тарелку" перед ним (см. tickCrimsonFeast).
      */
     private static void setupCrimsonFeastTable(ServerWorld world, BlockPos center, UUID sessionKey) {
         List<BlockPos> plates = new ArrayList<>();
-        // Стол 7 блоков вдоль оси X, в 3 блоках к северу от спавна
-        for (int x = -3; x <= 3; x++) {
-            BlockPos platePos = center.add(x, 0, -3);
-            world.setBlockState(platePos, net.minecraft.block.Blocks.CRIMSON_PLANKS.getDefaultState());
-            plates.add(platePos);
+        // Стол 9 блоков вдоль оси X, в 3 блоках к северу от спавна игрока
+        for (int x = -4; x <= 4; x++) {
+            BlockPos tablePos = center.add(x, 0, -3);
+            world.setBlockState(tablePos, net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState());
+            plates.add(tablePos);
         }
-        // Фонари душ по краям стола — багровый свет пира
-        world.setBlockState(center.add(-4, 0, -3), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
-        world.setBlockState(center.add(4, 0, -3), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
+        // Свечи-фонари душ по краям стола — багровый свет пира
+        world.setBlockState(center.add(-5, 0, -3), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
+        world.setBlockState(center.add(5, 0, -3), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
+
+        // Гости-манекены по дальней стороне стола, лицом к месту игрока
+        for (int x = -4; x <= 4; x += 2) {
+            ArmorStandEntity guest = new ArmorStandEntity(world,
+                    center.getX() + x + 0.5, center.getY(), center.getZ() - 4 + 0.5);
+            guest.setInvulnerable(true);
+            guest.setHideBasePlate(true);
+            guest.setCustomName(net.minecraft.text.Text.literal("§4Гость пира"));
+            guest.setCustomNameVisible(true);
+            guest.equipStack(net.minecraft.entity.EquipmentSlot.HEAD,
+                    new ItemStack(net.minecraft.item.Items.WITHER_SKELETON_SKULL));
+            guest.setYaw(0f); // смотрят на юг — прямо на игрока
+            world.spawnEntity(guest);
+        }
 
         FEAST_TABLES.put(sessionKey, plates);
         FEAST_DISH_ITEM.remove(sessionKey);
-        FEAST_SKIPS.put(sessionKey, 0);
-        NEXT_DISH_TICK.put(sessionKey, world.getServer().getTicks() + 200L); // первая подача через 10 сек
+        FEAST_DISH_TAINTED.remove(sessionKey);
+        FEAST_COURSES_DONE.put(sessionKey, 0);
+        FEAST_TOAST_ITEM.remove(sessionKey);
+        NEXT_DISH_TICK.put(sessionKey, (long) world.getServer().getTicks() + FEAST_FIRST_DISH_DELAY);
     }
 
     /**
-     * ДОБАВЛЕНО (сон "Кровавый пир"): центральная механика "ешь — теряй рассудок,
-     * голодай — теряй здоровье". Каждые FEAST_DISH_INTERVAL тиков на стол подаётся
-     * светящееся блюдо (rotten flesh). У игрока FEAST_DISH_LIFETIME тиков на выбор:
-     *  - ПОДОБРАТЬ ("отведать"): рассудок FEAST_EAT_SANITY, тошнота, а гнев стола
-     *    материализует рядом одержимого сельчанина;
-     *  - ПРОИГНОРИРОВАТЬ: рассудок FEAST_SKIP_SANITY, но растёт голод (эффект Hunger
-     *    усиливается с каждым пропуском), а с FEAST_STARVATION_SKIPS пропусков подряд
-     *    голод начинает наносить реальный урон.
-     * Победа — дожить до конца пира (таймаут сна). Поражение — смерть от голода
-     * или от монстров (DIED_IN_DREAM).
-     *
-     * ИЗМЕНЕНО (мультиплеер): теперь обходит активных игроков и использует sessionKey для доступа
-     * к общему стейту группы (стол, блюдо, пропуски).
+     * ДОБАВЛЕНО (сон "Кровавый пир", редизайн "Последний ужин"): за столом по очереди
+     * подают FEAST_COURSES блюд. Каждое блюдо либо свежее, либо тронутое (дымится зелёным):
+     *  - ОТВЕДАТЬ (подобрать): свежее +FEAST_EAT_FRESH_SANITY рассудка; тронутое —
+     *    FEAST_EAT_TAINTED_SANITY рассудка, яд и смех гостей;
+     *  - ОТОДВИНУТЬ (ПКМ по блюду, см. onFeastEntityUse): тронутое отодвинуть правильно
+     *    (+FEAST_REFUSE_TAINTED_SANITY), свежее — обидеть гостей (FEAST_REFUSE_FRESH_SANITY);
+     *  - ПРОИГНОРИРОВАТЬ: через FEAST_DISH_LIFETIME гости обиженно убирают блюдо сами.
+     * После всех блюд подают Кубок Тоста — подними его (ПКМ) и выпей (канал 3 сек) = победа.
+     * Поражение — смерть от монстров пира (DIED_IN_DREAM); таймаут — "пережил без тоста".
      */
     public static void tickCrimsonFeast(MinecraftServer server) {
         if (ACTIVE.isEmpty()) return;
@@ -2567,60 +2608,231 @@ public final class DreamManager {
             if (player == null || !(player.getEntityWorld() instanceof ServerWorld world)) continue;
 
             UUID sessionKey = sessionKey(playerId);
-            UUID dishUuid = FEAST_DISH_ITEM.get(sessionKey);
-            if (dishUuid != null) {
-                var dish = world.getEntity(dishUuid);
-                if (dish == null || !dish.isAlive()) {
-                    // Блюдо исчезло раньше срока — игрок его подобрал ("отведал")
-                    FEAST_DISH_ITEM.remove(sessionKey);
-                    FEAST_SKIPS.put(sessionKey, 0);
-                    SanityManager.get(player).addSanity(FEAST_EAT_SANITY);
-                    player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                            net.minecraft.entity.effect.StatusEffects.NAUSEA, 120, 0));
+
+            // 0) Канал тоста: игрок поднял кубок и пьёт — осталось допить
+            Long toastEnd = FEAST_TOAST_CHANNEL_END.get(playerId);
+            if (toastEnd != null) {
+                if (now >= toastEnd) {
+                    FEAST_TOAST_CHANNEL_END.remove(playerId);
                     world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                            net.minecraft.sound.SoundEvents.ENTITY_GENERIC_EAT,
-                            net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.6f);
-                    // Гнев стола: рядом материализуется одержимый сельчанин
-                    BlockPos angerPos = player.getBlockPos().add(
-                            RANDOM.nextInt(7) - 3, 0, RANDOM.nextInt(7) - 3);
-                    spawnOneAt(world, SomniumMod.id("feral_villager"), angerPos);
-                    NEXT_DISH_TICK.put(sessionKey, now + FEAST_DISH_INTERVAL);
-                } else if (now >= FEAST_DISH_DEADLINE.getOrDefault(sessionKey, now)) {
-                    // Блюдо протухло нетронутым — игрок отказался
-                    dish.discard();
-                    FEAST_DISH_ITEM.remove(sessionKey);
-                    int skips = FEAST_SKIPS.getOrDefault(sessionKey, 0) + 1;
-                    FEAST_SKIPS.put(sessionKey, skips);
-                    SanityManager.get(player).addSanity(FEAST_SKIP_SANITY);
-                    player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                            net.minecraft.entity.effect.StatusEffects.HUNGER, 400,
-                            Math.min(skips - 1, 2)));
-                    if (skips >= FEAST_STARVATION_SKIPS) {
-                        // Голодание: тело начинает таять прямо во сне
-                        player.damage(world.getDamageSources().starve(), 2.0f);
-                    }
-                    NEXT_DISH_TICK.put(sessionKey, now + FEAST_DISH_INTERVAL / 2);
+                            net.minecraft.sound.SoundEvents.ENTITY_PLAYER_LEVELUP,
+                            net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
+                    wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
+                } else if ((toastEnd - now) % 20 == 0) {
+                    player.sendMessage(net.minecraft.text.Text.literal("§6Ты пьёшь за хозяина пира..."), true);
+                    world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                            net.minecraft.sound.SoundEvents.ENTITY_GENERIC_DRINK,
+                            net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.9f);
                 }
                 continue;
             }
 
-            // Нет активного блюда — пора подавать следующее
+            // 1) На столе активное блюдо — ждём решения игрока
+            UUID dishUuid = FEAST_DISH_ITEM.get(sessionKey);
+            if (dishUuid != null) {
+                var dish = world.getEntity(dishUuid);
+                boolean tainted = FEAST_DISH_TAINTED.getOrDefault(sessionKey, false);
+                if (dish == null || !dish.isAlive()) {
+                    // Блюдо исчезло — игрок его подобрал ("отведал")
+                    finishCourse(sessionKey, now);
+                    if (tainted) {
+                        SanityManager.get(player).addSanity(FEAST_EAT_TAINTED_SANITY);
+                        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                                net.minecraft.entity.effect.StatusEffects.POISON, 200, 0));
+                        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                                net.minecraft.entity.effect.StatusEffects.NAUSEA, 160, 0));
+                        player.sendMessage(net.minecraft.text.Text.literal(
+                                "§2Блюдо было тронуто... Гости хохочут."), true);
+                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                                net.minecraft.sound.SoundEvents.ENTITY_WITCH_CELEBRATE,
+                                net.minecraft.sound.SoundCategory.HOSTILE, 1.0f, 0.6f);
+                    } else {
+                        SanityManager.get(player).addSanity(FEAST_EAT_FRESH_SANITY);
+                        player.sendMessage(net.minecraft.text.Text.literal(
+                                "§6Свежее блюдо. Гости одобрительно кивают."), true);
+                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                                net.minecraft.sound.SoundEvents.ENTITY_GENERIC_EAT,
+                                net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
+                    }
+                } else {
+                    // Тронутое блюдо дымится зелёным — внимательный игрок заметит
+                    if (tainted && now % 10 == 0) {
+                        world.spawnParticles(net.minecraft.particle.ParticleTypes.WITCH,
+                                dish.getX(), dish.getY() + 0.4, dish.getZ(),
+                                3, 0.15, 0.1, 0.15, 0.01);
+                    }
+                    if (now >= FEAST_DISH_DEADLINE.getOrDefault(sessionKey, now)) {
+                        // Игрок проигнорировал блюдо — гости обиженно убирают его сами
+                        dish.discard();
+                        finishCourse(sessionKey, now);
+                        SanityManager.get(player).addSanity(FEAST_IGNORED_SANITY);
+                        player.sendMessage(net.minecraft.text.Text.literal(
+                                "§7Гости молча убирают нетронутое блюдо... Они обижены."), true);
+                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                                net.minecraft.sound.SoundEvents.ENTITY_VILLAGER_NO,
+                                net.minecraft.sound.SoundCategory.NEUTRAL, 1.0f, 0.6f);
+                    }
+                }
+                continue;
+            }
+
+            // 2) Все блюда разрешены — подаём Кубок Тоста (финал сна)
+            int done = FEAST_COURSES_DONE.getOrDefault(sessionKey, 0);
+            if (done >= FEAST_COURSES) {
+                if (!FEAST_TOAST_ITEM.containsKey(sessionKey)) {
+                    spawnToastGoblet(world, sessionKey);
+                } else if (now % 20 == 0) {
+                    // Кубок манит золотыми частицами
+                    UUID toastUuid = FEAST_TOAST_ITEM.get(sessionKey);
+                    var toast = world.getEntity(toastUuid);
+                    if (toast != null) {
+                        world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                                toast.getX(), toast.getY() + 0.4, toast.getZ(),
+                                2, 0.15, 0.1, 0.15, 0.01);
+                    }
+                }
+                continue;
+            }
+
+            // 3) Подача следующего блюда
             if (now >= NEXT_DISH_TICK.getOrDefault(sessionKey, 0L)) {
-                List<BlockPos> plates = FEAST_TABLES.get(sessionKey);
-                if (plates == null || plates.isEmpty()) continue;
-                BlockPos plate = plates.get(RANDOM.nextInt(plates.size()));
-                ItemEntity dish = new ItemEntity(world,
-                        plate.getX() + 0.5, plate.getY() + 1.0, plate.getZ() + 0.5,
-                        new ItemStack(net.minecraft.item.Items.ROTTEN_FLESH));
-                dish.setNeverDespawn();
-                dish.setGlowing(true); // блюдо зовёт игрока сквозь темноту
-                world.spawnEntity(dish);
-                FEAST_DISH_ITEM.put(sessionKey, dish.getUuid());
-                FEAST_DISH_DEADLINE.put(sessionKey, now + FEAST_DISH_LIFETIME);
-                world.playSound(null, plate, net.minecraft.sound.SoundEvents.ENTITY_ITEM_FRAME_PLACE,
-                        net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.5f);
+                serveNextDish(world, sessionKey, now, done == 0);
             }
         }
+    }
+
+    /** Блюдо разрешено любым способом — счётчик курсов +1, следующая подача по расписанию. */
+    private static void finishCourse(UUID sessionKey, long now) {
+        FEAST_DISH_ITEM.remove(sessionKey);
+        FEAST_DISH_TAINTED.remove(sessionKey);
+        FEAST_COURSES_DONE.put(sessionKey, FEAST_COURSES_DONE.getOrDefault(sessionKey, 0) + 1);
+        NEXT_DISH_TICK.put(sessionKey, now + FEAST_DISH_INTERVAL);
+    }
+
+    /** Ставит на центральную тарелку перед игроком очередное блюдо — свежее или тронутое. */
+    private static void serveNextDish(ServerWorld world, UUID sessionKey, long now, boolean firstDish) {
+        List<BlockPos> plates = FEAST_TABLES.get(sessionKey);
+        if (plates == null || plates.isEmpty()) return;
+        BlockPos plate = plates.get(plates.size() / 2); // место игрока — центр стола
+
+        boolean tainted = RANDOM.nextDouble() < FEAST_TAINTED_CHANCE;
+        net.minecraft.item.Item[] freshMenu = {
+                net.minecraft.item.Items.GOLDEN_CARROT, net.minecraft.item.Items.COOKED_BEEF,
+                net.minecraft.item.Items.BAKED_POTATO, net.minecraft.item.Items.BREAD,
+                net.minecraft.item.Items.APPLE };
+        net.minecraft.item.Item[] taintedMenu = {
+                net.minecraft.item.Items.ROTTEN_FLESH, net.minecraft.item.Items.SPIDER_EYE,
+                net.minecraft.item.Items.POISONOUS_POTATO };
+        net.minecraft.item.Item dishItem = tainted
+                ? taintedMenu[RANDOM.nextInt(taintedMenu.length)]
+                : freshMenu[RANDOM.nextInt(freshMenu.length)];
+
+        ItemStack stack = new ItemStack(dishItem);
+        stack.setCustomName(net.minecraft.text.Text.literal("§6Блюдо пира"));
+        ItemEntity dish = new ItemEntity(world,
+                plate.getX() + 0.5, plate.getY() + 1.0, plate.getZ() + 0.5, stack);
+        dish.setNeverDespawn();
+        dish.setGlowing(true);
+        world.spawnEntity(dish);
+
+        FEAST_DISH_ITEM.put(sessionKey, dish.getUuid());
+        FEAST_DISH_TAINTED.put(sessionKey, tainted);
+        FEAST_DISH_DEADLINE.put(sessionKey, now + FEAST_DISH_LIFETIME);
+
+        world.playSound(null, plate, net.minecraft.sound.SoundEvents.ENTITY_ITEM_FRAME_PLACE,
+                net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.5f);
+
+        if (firstDish) {
+            ServerPlayerEntity player = world.getServer().getPlayerManager()
+                    .getPlayer(sessionKey);
+            if (player != null) {
+                player.sendMessage(net.minecraft.text.Text.literal(
+                        "§6Первое блюдо. Отведай — или отодвинь (ПКМ), если оно тронуто."), true);
+            }
+        }
+    }
+
+    /** Ставит на стол Кубок Тоста — финальный выход из сна (ПКМ = поднять и пить). */
+    private static void spawnToastGoblet(ServerWorld world, UUID sessionKey) {
+        List<BlockPos> plates = FEAST_TABLES.get(sessionKey);
+        if (plates == null || plates.isEmpty()) return;
+        BlockPos plate = plates.get(plates.size() / 2);
+
+        ItemStack goblet = new ItemStack(net.minecraft.item.Items.HONEY_BOTTLE);
+        goblet.setCustomName(net.minecraft.text.Text.literal("§6§lКубок Тоста"));
+        ItemEntity toast = new ItemEntity(world,
+                plate.getX() + 0.5, plate.getY() + 1.0, plate.getZ() + 0.5, goblet);
+        toast.setNeverDespawn();
+        toast.setGlowing(true);
+        world.spawnEntity(toast);
+        FEAST_TOAST_ITEM.put(sessionKey, toast.getUuid());
+
+        world.playSound(null, plate, net.minecraft.sound.SoundEvents.BLOCK_BELL_USE,
+                net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.6f);
+
+        ServerPlayerEntity player = world.getServer().getPlayerManager().getPlayer(sessionKey);
+        if (player != null) {
+            player.sendMessage(net.minecraft.text.Text.literal(
+                    "§6Пир окончен. Подними Кубок Тоста (ПКМ) — и проснёшься."), true);
+        }
+    }
+
+    /**
+     * ДОБАВЛЕНО (сон "Кровавый пир", редизайн): ПКМ по сущностям пира.
+     * ПКМ по блюду = "отодвинуть" (правильный ответ на тронутое блюдо);
+     * ПКМ по Кубку Тоста = поднять его и начать канал питья (выход из сна).
+     * Регистрация события — UseEntityCallback в SomniumMod#onInitialize.
+     */
+    public static net.minecraft.util.ActionResult onFeastEntityUse(ServerPlayerEntity player,
+                                                                   net.minecraft.entity.Entity entity) {
+        ActiveDream active = ACTIVE.get(player.getUuid());
+        if (active == null || !active.dreamId().equals(SomniumMod.id("crimson_feast"))) {
+            return net.minecraft.util.ActionResult.PASS;
+        }
+        if (!(player.getEntityWorld() instanceof ServerWorld world)) {
+            return net.minecraft.util.ActionResult.PASS;
+        }
+        UUID sessionKey = sessionKey(player.getUuid());
+        long now = world.getServer().getTicks();
+
+        // ПКМ по блюду — отодвинуть
+        UUID dishUuid = FEAST_DISH_ITEM.get(sessionKey);
+        if (dishUuid != null && dishUuid.equals(entity.getUuid())) {
+            boolean tainted = FEAST_DISH_TAINTED.getOrDefault(sessionKey, false);
+            entity.discard();
+            finishCourse(sessionKey, now);
+            if (tainted) {
+                SanityManager.get(player).addSanity(FEAST_REFUSE_TAINTED_SANITY);
+                player.sendMessage(net.minecraft.text.Text.literal(
+                        "§6Ты отодвигаешь тронутое блюдо. Гости уважительно молчат."), true);
+            } else {
+                SanityManager.get(player).addSanity(FEAST_REFUSE_FRESH_SANITY);
+                player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                        net.minecraft.entity.effect.StatusEffects.HUNGER, 300, 0));
+                player.sendMessage(net.minecraft.text.Text.literal(
+                        "§7Ты отодвигаешь свежее блюдо. Гости недовольно бормочут."), true);
+                world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                        net.minecraft.sound.SoundEvents.ENTITY_VILLAGER_NO,
+                        net.minecraft.sound.SoundCategory.NEUTRAL, 1.0f, 0.7f);
+            }
+            return net.minecraft.util.ActionResult.SUCCESS;
+        }
+
+        // ПКМ по Кубку Тоста — поднять и пить (канал 3 секунды до пробуждения)
+        UUID toastUuid = FEAST_TOAST_ITEM.get(sessionKey);
+        if (toastUuid != null && toastUuid.equals(entity.getUuid())) {
+            entity.discard();
+            FEAST_TOAST_ITEM.remove(sessionKey);
+            FEAST_TOAST_CHANNEL_END.put(player.getUuid(), now + FEAST_TOAST_CHANNEL_TICKS);
+            player.sendMessage(net.minecraft.text.Text.literal(
+                    "§6Ты поднимаешь Кубок Тоста... Гости замирают."), true);
+            world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                    net.minecraft.sound.SoundEvents.ITEM_BOTTLE_FILL,
+                    net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.7f);
+            return net.minecraft.util.ActionResult.SUCCESS;
+        }
+
+        return net.minecraft.util.ActionResult.PASS;
     }
 
     /**

@@ -156,6 +156,15 @@ public final class SomniumMod implements ModInitializer {
             return net.minecraft.util.ActionResult.PASS;
         });
 
+        // 22. ДОБАВЛЕНО (сон "Кровавый пир", редизайн "Последний ужин"): ПКМ по блюду =
+        // отодвинуть, ПКМ по Кубку Тоста = поднять и выпить (выход из сна)
+        net.fabricmc.fabric.api.event.player.UseEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+            if (player instanceof net.minecraft.server.network.ServerPlayerEntity serverPlayer) {
+                return com.somnium.mod.dream.DreamManager.onFeastEntityUse(serverPlayer, entity);
+            }
+            return net.minecraft.util.ActionResult.PASS;
+        });
+
         LOGGER.info("[Somnium] Инициализация завершена. Сладких снов.");
     }
 }
