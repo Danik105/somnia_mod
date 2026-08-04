@@ -435,11 +435,11 @@ public final class DreamManager {
             // ИЗМЕНЕНО: используем groupId вместо player.getUuid() для ключа общего стейта
             bossUuid = spawnDreamMonsters(dreamWorld, spawnPos, dream, groupId);
 
-            // ДОБАВЛЕНО (сон "Падающие доски"): специальная логика для этого сна - создаём платформу
-            // 2×2 из досок и запускаем таймер исчезновения блоков.
+            // ДОБАВЛЕНО (сон "Лестница в никуда", редизайн "Падающих досок"): лестничная шахта
+            // над пустотой — спиральный марш достраивается вверх по мере подъёма игрока.
             // ИЗМЕНЕНО: используем groupId вместо player.getUuid() для ключа общего стейта
             if (dream.id().equals(SomniumMod.id("falling_planks"))) {
-                setupFallingPlanksPlatform(dreamWorld, spawnPos, groupId);
+                setupStairwell(dreamWorld, spawnPos, groupId);
             }
 
             // ДОБАВЛЕНО (сон "Кровавый пир", новая механика): пиршественный стол перед игроком
@@ -1233,6 +1233,9 @@ public final class DreamManager {
         // ДОБАВЛЕНО (сон "Падающие доски"): очищаем данные о платформе при пробуждении
         // ИСПРАВЛЕНО: карты платформ ключуются sessionKey — см. dreamStateKey выше
         clearFallingPlanksData(dreamStateKey);
+        // "Лестница в никуда": per-player стейт (последняя безопасная точка, стояние на гнилом)
+        STAIR_LAST_SAFE.remove(player.getUuid());
+        STAIR_ROTTEN_STAND.remove(player.getUuid());
 
         // ИСПРАВЛЕНИЕ (утечка per-dream стейта в общем сне): карты состояния снов (стол пира,
         // лабиринт и т.п.) ключуются sessionKey (groupId), а leaveSession() выше уже отвязал
@@ -1700,181 +1703,413 @@ public final class DreamManager {
         return ACTIVE.containsKey(playerId);
     }
 
-    /** Карта игроков в сне "Падающие доски" -> список позиций досок платформы для удаления */
-    private static final Map<UUID, List<BlockPos>> FALLING_PLANKS_PLATFORMS = new HashMap<>();
-    /** Карта игроков -> тик следующего события обрушения (выбор доски или её падение) */
-    private static final Map<UUID, Long> NEXT_PLANK_REMOVAL = new HashMap<>();
-    /** ДОБАВЛЕНО: доска, которая сейчас "трещит" и провалится по истечении предупреждения */
-    private static final Map<UUID, BlockPos> WARNED_PLANK = new HashMap<>();
-    /** ДОБАВЛЕНО: текущий интервал обрушения (тики) — уменьшается с каждой упавшей доской */
-    private static final Map<UUID, Integer> COLLAPSE_INTERVAL = new HashMap<>();
+    // ==================== ДОБАВЛЕНО (сон "Лестница в никуда", редизайн "Падающих досок") ====================
+    // Игрок оказывается на дне тёмной лестничной клетки, как в многоэтажке. Спиральный
+    // марш по стенам достраивается вверх по мере подъёма, а ступени за спиной обрушаются.
+    // Выше начинаются гнилые ступени (бирюзовые, дымятся) — ломаются под ногами. На третьем
+    // витке лестница резко обрывается: площадка, глухой потолок и люк — выход из сна.
 
-    // ДОБАВЛЕНО (динамика "Падающих досок" по запросу: "придумай какую-то динамику"):
-    // механика "ускоряющееся обрушение, преследующее игрока".
-    /** Размер стартовой платформы (досок по стороне) */
-    private static final int PLANKS_PLATFORM_SIZE = 6;
-    /** Стартовый интервал между циклами обрушения (тики) */
-    private static final int COLLAPSE_INTERVAL_START = 160;
-    /** Минимальный интервал обрушения — "потолок скорости" конца сна */
-    private static final int COLLAPSE_INTERVAL_MIN = 25;
-    /** Множитель ускорения: интервал умножается на него после каждой упавшей доски */
-    private static final double COLLAPSE_ACCELERATION = 0.95;
-    /** Сколько тиков доска "трещит" (частицы + скрип) перед тем, как провалиться */
-    private static final int PLANK_WARNING_TICKS = 30;
-    /** Шанс, что обрушение выберет доску ближайшую к игроку (иначе — случайную) */
-    private static final double COLLAPSE_CHASE_CHANCE = 0.7;
+    /** Центр шахты (позиция спавна игрока) для каждой сессии */
+    private static final Map<UUID, BlockPos> STAIR_ORIGIN = new HashMap<>();
+    /** Индекс следующей непостроенной ступени */
+    private static final Map<UUID, Integer> STAIR_BUILT_STEPS = new HashMap<>();
+    /** Индекс ступени -> её позиция (нужно для обрушения за спиной) */
+    private static final Map<UUID, List<BlockPos>> STAIR_STEP_POSITIONS = new HashMap<>();
+    /** Индекс следующей ступени, которую предстоит обрушить */
+    private static final Map<UUID, Integer> STAIR_COLLAPSE_NEXT = new HashMap<>();
+    /** Очередь позиций на обрушение — сыплем по одной ступени за пару тиков */
+    private static final Map<UUID, List<BlockPos>> STAIR_COLLAPSE_QUEUE = new HashMap<>();
+    /** Гнилые ступени (не держат вес) */
+    private static final Map<UUID, java.util.Set<BlockPos>> STAIR_ROTTEN = new HashMap<>();
+    /** Позиция люка в потолке финальной площадки — выход из сна */
+    private static final Map<UUID, BlockPos> STAIR_HATCH = new HashMap<>();
+    /** Текущая высота временного потолка шахты (поднимается по мере постройки) */
+    private static final Map<UUID, Integer> STAIR_CEILING_Y = new HashMap<>();
+    /** Верх построенной части стен шахты */
+    private static final Map<UUID, Integer> STAIR_WALL_TOP_Y = new HashMap<>();
+    /** Тик пробуждения после открытия люка */
+    private static final Map<UUID, Long> STAIR_WAKE_TICK = new HashMap<>();
+    /** Сообщение "лестница обрывается" показано */
+    private static final Map<UUID, Boolean> STAIR_FINAL_ANNOUNCED = new HashMap<>();
+    /** Последняя безопасная точка игрока на лестнице (per-player) */
+    private static final Map<UUID, net.minecraft.util.math.Vec3d> STAIR_LAST_SAFE = new HashMap<>();
+    /** Сколько тиков игрок стоит на гнилой ступени (per-player) */
+    private static final Map<UUID, Integer> STAIR_ROTTEN_STAND = new HashMap<>();
+
+    /** Кольцо периметра шахты 7×7 (x,z ∈ -3..3) по часовой стрелке от северо-западного угла */
+    private static final int[][] STAIR_RING = {
+            {-3, -3}, {-2, -3}, {-1, -3}, {0, -3}, {1, -3}, {2, -3}, {3, -3},
+            {3, -2}, {3, -1}, {3, 0}, {3, 1}, {3, 2}, {3, 3},
+            {2, 3}, {1, 3}, {0, 3}, {-1, 3}, {-2, 3}, {-3, 3},
+            {-3, 2}, {-3, 1}, {-3, 0}, {-3, -1}, {-3, -2}
+    };
+    /** Финал — 3 витка (72 ступени, +36 высоты): лестница резко обрывается */
+    private static final int STAIR_FINAL_STEP = 72;
+    /** Сколько ступеней строим вперёд от игрока */
+    private static final int STAIR_BUILD_AHEAD = 30;
+    /** Ступени ниже этого отставания от игрока обрушаются */
+    private static final int STAIR_COLLAPSE_BEHIND = 12;
+    /** Гниль начинается с 30-й ступени (вторая половина подъёма) */
+    private static final int STAIR_ROTTEN_START_STEP = 30;
+    private static final double STAIR_ROTTEN_CHANCE = 0.15;
+    /** Через сколько тиков стояния гнилая ступень ломается */
+    private static final int STAIR_ROTTEN_BREAK_TICKS = 15;
+    /** Падение ниже последней безопасной точки на столько блоков = ловим и возвращаем */
+    private static final double STAIR_FALL_CATCH_DEPTH = 5.0;
+    private static final float STAIR_FALL_DAMAGE = 4.0f;
+    private static final float STAIR_FALL_SANITY = -4.0f;
+    private static final float STAIR_ROTTEN_SANITY = -2.0f;
 
     /**
-     * ДОБАВЛЕНО (сон "Падающие доски"): создаёт платформу 6×6 из дубовых досок под
-     * игроком в пустоте. Доски проваливаются всё быстрее и чаще — именно под ногами.
+     * ДОБАВЛЕНО (сон "Лестница в никуда"): строит низ лестничной клетки — тёмную шахту
+     * 7×7 с полированным глубинносланцевым полом и стенами, уходящими вниз в пустоту.
+     * Ступени достраиваются по мере подъёма (см. tickFallingPlanks).
      */
-    /**
-     * ИЗМЕНЕНО (мультиплеер): теперь принимает sessionKey (groupId) вместо playerId
-     */
-    private static void setupFallingPlanksPlatform(ServerWorld world, BlockPos center, UUID sessionKey) {
-        List<BlockPos> planks = new ArrayList<>();
-        int half = PLANKS_PLATFORM_SIZE / 2;
-        // Создаём платформу 6×6 прямо под точкой спавна игрока
-        for (int x = 0; x < PLANKS_PLATFORM_SIZE; x++) {
-            for (int z = 0; z < PLANKS_PLATFORM_SIZE; z++) {
-                BlockPos plankPos = center.add(x - half, -1, z - half); // -1 по Y = прямо под ногами
-                world.setBlockState(plankPos, net.minecraft.block.Blocks.OAK_PLANKS.getDefaultState());
-                planks.add(plankPos);
+    private static void setupStairwell(ServerWorld world, BlockPos center, UUID sessionKey) {
+        // Пол шахты
+        for (int x = -3; x <= 3; x++) {
+            for (int z = -3; z <= 3; z++) {
+                world.setBlockState(center.add(x, -1, z),
+                        net.minecraft.block.Blocks.POLISHED_DEEPSLATE.getDefaultState());
             }
         }
-        FALLING_PLANKS_PLATFORMS.put(sessionKey, planks);
-        COLLAPSE_INTERVAL.put(sessionKey, COLLAPSE_INTERVAL_START);
-        WARNED_PLANK.remove(sessionKey);
-        NEXT_PLANK_REMOVAL.put(sessionKey, world.getServer().getTicks() + 100L); // 5 сек передышки на старте
+        // Стены: от восьми блоков ниже пола (шахта "растёт из темноты") до +5
+        buildShaftWalls(world, center, center.getY() - 8, center.getY() + 5);
+        // Временный потолок — поднимается по мере постройки лестницы
+        buildShaftCeiling(world, center, center.getY() + 5);
+        // Факел душ у входа
+        world.setBlockState(center.add(3, 1, -3), net.minecraft.block.Blocks.SOUL_WALL_TORCH.getDefaultState()
+                .with(net.minecraft.block.WallTorchBlock.FACING, net.minecraft.util.math.Direction.WEST));
+
+        STAIR_ORIGIN.put(sessionKey, center);
+        STAIR_BUILT_STEPS.put(sessionKey, 0);
+        STAIR_STEP_POSITIONS.put(sessionKey, new ArrayList<>());
+        STAIR_COLLAPSE_NEXT.put(sessionKey, 0);
+        STAIR_COLLAPSE_QUEUE.put(sessionKey, new ArrayList<>());
+        STAIR_ROTTEN.put(sessionKey, new java.util.HashSet<>());
+        STAIR_HATCH.remove(sessionKey);
+        STAIR_CEILING_Y.put(sessionKey, center.getY() + 5);
+        STAIR_WALL_TOP_Y.put(sessionKey, center.getY() + 5);
+        STAIR_WAKE_TICK.remove(sessionKey);
+        STAIR_FINAL_ANNOUNCED.remove(sessionKey);
+    }
+
+    /** Стены шахты: кольцо 9×9 (x,z = ±4) из глубинносланца с кирпичными поясами, слои y0..y1. */
+    private static void buildShaftWalls(ServerWorld world, BlockPos center, int y0, int y1) {
+        for (int y = y0; y <= y1; y++) {
+            boolean band = Math.floorMod(y - center.getY(), 4) == 0;
+            for (int x = -4; x <= 4; x++) {
+                for (int z = -4; z <= 4; z++) {
+                    if (Math.abs(x) != 4 && Math.abs(z) != 4) continue;
+                    world.setBlockState(new BlockPos(center.getX() + x, y, center.getZ() + z),
+                            band ? net.minecraft.block.Blocks.DEEPSLATE_BRICKS.getDefaultState()
+                                 : net.minecraft.block.Blocks.POLISHED_DEEPSLATE.getDefaultState());
+                }
+            }
+        }
+    }
+
+    /** Потолок шахты 7×7 на заданной высоте. */
+    private static void buildShaftCeiling(ServerWorld world, BlockPos center, int y) {
+        for (int x = -3; x <= 3; x++) {
+            for (int z = -3; z <= 3; z++) {
+                world.setBlockState(new BlockPos(center.getX() + x, y, center.getZ() + z),
+                        net.minecraft.block.Blocks.POLISHED_DEEPSLATE.getDefaultState());
+            }
+        }
+    }
+
+    /** Снимает временный потолок (при подъёме или перед постройкой финального). */
+    private static void clearShaftCeiling(ServerWorld world, BlockPos center, int y) {
+        for (int x = -3; x <= 3; x++) {
+            for (int z = -3; z <= 3; z++) {
+                world.setBlockState(new BlockPos(center.getX() + x, y, center.getZ() + z),
+                        net.minecraft.block.Blocks.AIR.getDefaultState());
+            }
+        }
+    }
+
+    /** Строит ступень idx спирального марша: кольцо периметра, +0.5 высоты за ступень. */
+    private static void buildStairStep(ServerWorld world, BlockPos center, UUID sessionKey, int idx) {
+        int[] cell = STAIR_RING[idx % STAIR_RING.length];
+        int y = center.getY() + idx / 2;
+        BlockPos pos = new BlockPos(center.getX() + cell[0], y, center.getZ() + cell[1]);
+
+        // Ступень смотрит "лицом" к предыдущей (вниз по маршу)
+        int[] prev = STAIR_RING[Math.floorMod(idx - 1, STAIR_RING.length)];
+        int dx = prev[0] - cell[0];
+        int dz = prev[1] - cell[1];
+        net.minecraft.util.math.Direction facing =
+                dx == 1 ? net.minecraft.util.math.Direction.EAST :
+                dx == -1 ? net.minecraft.util.math.Direction.WEST :
+                dz == 1 ? net.minecraft.util.math.Direction.SOUTH :
+                net.minecraft.util.math.Direction.NORTH;
+
+        boolean rotten = idx >= STAIR_ROTTEN_START_STEP && RANDOM.nextDouble() < STAIR_ROTTEN_CHANCE;
+        var block = rotten ? net.minecraft.block.Blocks.WARPED_STAIRS
+                           : net.minecraft.block.Blocks.DARK_OAK_STAIRS;
+        world.setBlockState(pos, block.getDefaultState()
+                .with(net.minecraft.block.StairsBlock.FACING, facing)
+                .with(net.minecraft.block.StairsBlock.HALF,
+                        idx % 2 == 0 ? net.minecraft.block.enums.BlockHalf.BOTTOM
+                                     : net.minecraft.block.enums.BlockHalf.TOP));
+        STAIR_STEP_POSITIONS.get(sessionKey).add(pos);
+        if (rotten) {
+            STAIR_ROTTEN.get(sessionKey).add(pos);
+        }
+
+        // Факел душ на стене над каждой шестой ступенью — мрачная подсветка марша
+        if (idx % 6 == 0) {
+            net.minecraft.util.math.Direction intoShaft =
+                    cell[0] == -3 ? net.minecraft.util.math.Direction.EAST :
+                    cell[0] == 3 ? net.minecraft.util.math.Direction.WEST :
+                    cell[1] == -3 ? net.minecraft.util.math.Direction.SOUTH :
+                    net.minecraft.util.math.Direction.NORTH;
+            BlockPos torchPos = new BlockPos(pos.getX(), y + 2, pos.getZ());
+            if (world.getBlockState(torchPos).isAir()) {
+                world.setBlockState(torchPos, net.minecraft.block.Blocks.SOUL_WALL_TORCH.getDefaultState()
+                        .with(net.minecraft.block.WallTorchBlock.FACING, intoShaft));
+            }
+        }
+    }
+
+    /** Финал: лестница обрывается — площадка в углу, глухой потолок и люк со светом за ним. */
+    private static void buildStairFinal(ServerWorld world, BlockPos center, UUID sessionKey) {
+        int platformY = center.getY() + STAIR_FINAL_STEP / 2;
+        // Площадка в северо-западном углу (последняя ступень витка сама ведёт на неё)
+        for (int[] cell : new int[][] {{-3, -3}, {-2, -3}, {-2, -2}}) {
+            world.setBlockState(new BlockPos(center.getX() + cell[0], platformY, center.getZ() + cell[1]),
+                    net.minecraft.block.Blocks.DARK_OAK_PLANKS.getDefaultState());
+        }
+        // Стены до потолка и глухой финальный потолок вместо временного
+        int ceilingY = platformY + 5;
+        clearShaftCeiling(world, center, STAIR_CEILING_Y.get(sessionKey));
+        buildShaftWalls(world, center, STAIR_WALL_TOP_Y.get(sessionKey) + 1, ceilingY);
+        buildShaftCeiling(world, center, ceilingY);
+        STAIR_WALL_TOP_Y.put(sessionKey, ceilingY);
+        STAIR_CEILING_Y.put(sessionKey, ceilingY);
+        // Люк над площадкой — за ним свет пробуждения
+        BlockPos hatch = new BlockPos(center.getX() - 3, ceilingY, center.getZ() - 3);
+        world.setBlockState(hatch, net.minecraft.block.Blocks.SPRUCE_TRAPDOOR.getDefaultState()
+                .with(net.minecraft.block.TrapdoorBlock.HALF, net.minecraft.block.enums.BlockHalf.BOTTOM)
+                .with(net.minecraft.block.TrapdoorBlock.OPEN, false));
+        world.setBlockState(hatch.up(), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
+        STAIR_HATCH.put(sessionKey, hatch);
+        // Факел душ на площадке
+        world.setBlockState(new BlockPos(center.getX() - 2, platformY + 1, center.getZ() - 3),
+                net.minecraft.block.Blocks.SOUL_WALL_TORCH.getDefaultState()
+                        .with(net.minecraft.block.WallTorchBlock.FACING, net.minecraft.util.math.Direction.SOUTH));
     }
 
     /**
-     * ИЗМЕНЕНО (сон "Падающие доски"): динамика обрушения. Двухфазный цикл:
-     * 1) выбор жертвы — с шансом COLLAPSE_CHASE_CHANCE это доска, ближайшая к игроку,
-     *    иначе случайная; доска начинает "трещать" (частицы + скрип) на PLANK_WARNING_TICKS;
-     * 2) по истечении предупреждения доска проваливается, а интервал до следующего
-     *    цикла сокращается на COLLAPSE_ACCELERATION — темп растёт к концу сна.
-     * Победа — дожить до конца сна; поражение — упасть в пустоту (см. checkFallingPlanksVoidFall).
-     *
-     * ИЗМЕНЕНО (мультиплеер): теперь обходит активных игроков и использует sessionKey для доступа
-     * к общему стейту группы (платформа, интервал, предупреждённая доска).
+     * ИЗМЕНЕНО (сон "Лестница в никуда", бывш. "Падающие доски"): спиральный марш
+     * достраивается вверх по мере подъёма, ступени обрушаются за спиной, гнилые ступени
+     * ломаются под ногами, падение мягко возвращает на последнюю безопасную точку.
+     * Выход — люк в потолке финальной площадки (открывается обычным ПКМ).
+     * Поражение — смерть во сне или падение в пустоту вне шахты (checkFallingPlanksVoidFall).
      */
     public static void tickFallingPlanks(MinecraftServer server) {
         if (ACTIVE.isEmpty()) return;
-
         long now = server.getTicks();
+
         for (UUID playerId : new ArrayList<>(ACTIVE.keySet())) {
             ActiveDream active = ACTIVE.get(playerId);
             if (active == null || !active.dreamId().equals(SomniumMod.id("falling_planks"))) {
                 continue; // не наш сон
             }
-
             ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
-            if (player == null || !(player.getEntityWorld() instanceof ServerWorld dreamWorld)) {
-                continue; // игрок оффлайн
-            }
+            if (player == null || !(player.getEntityWorld() instanceof ServerWorld world)) continue;
 
             UUID sessionKey = sessionKey(playerId);
-            Long nextRemoval = NEXT_PLANK_REMOVAL.get(sessionKey);
-            if (nextRemoval == null || now < nextRemoval) continue;
+            BlockPos center = STAIR_ORIGIN.get(sessionKey);
+            if (center == null) continue;
 
-            List<BlockPos> planks = FALLING_PLANKS_PLATFORMS.get(sessionKey);
-            if (planks == null || planks.isEmpty()) {
-                // Все доски уже исчезли - очищаем только если группа пуста
-                if (!SharedDreamSession.hasOtherPlayers(playerId, active.dreamId())) {
-                    clearFallingPlanksData(sessionKey);
+            // 0) Защита сцены: в шахте не должно быть монстров вообще
+            if (now % 10 == 0) {
+                for (net.minecraft.entity.mob.MobEntity mob : world.getEntitiesByClass(
+                        net.minecraft.entity.mob.MobEntity.class,
+                        new net.minecraft.util.math.Box(center).expand(20, 50, 20),
+                        e -> e instanceof net.minecraft.entity.mob.Monster)) {
+                    mob.discard();
                 }
-                continue;
             }
 
-            BlockPos warned = WARNED_PLANK.get(sessionKey);
-            if (warned == null) {
-                // Фаза 1: выбираем доску-жертву — обрушение "преследует" игрока
-                BlockPos target = pickPlankTarget(planks, player);
-                WARNED_PLANK.put(sessionKey, target);
-                NEXT_PLANK_REMOVAL.put(sessionKey, now + PLANK_WARNING_TICKS);
-
-                // Предупреждение: скрип и трескающиеся частицы над доской
-                dreamWorld.playSound(null, target,
-                        net.minecraft.sound.SoundEvents.BLOCK_WOOD_HIT,
-                        net.minecraft.sound.SoundCategory.BLOCKS,
-                        1.0f, 0.6f);
-                dreamWorld.spawnParticles(
-                        new net.minecraft.particle.BlockStateParticleEffect(
-                                net.minecraft.particle.ParticleTypes.BLOCK,
-                                net.minecraft.block.Blocks.OAK_PLANKS.getDefaultState()
-                        ),
-                        target.getX() + 0.5, target.getY() + 1.0, target.getZ() + 0.5,
-                        8, 0.3, 0.1, 0.3, 0.05);
-                continue;
+            // 1) Текущая "ступень" игрока по высоте и достройка марша вперёд
+            int playerStep = (int) Math.max(0, Math.round((player.getY() - center.getY()) * 2));
+            int built = STAIR_BUILT_STEPS.getOrDefault(sessionKey, 0);
+            int targetBuilt = Math.min(playerStep + STAIR_BUILD_AHEAD, STAIR_FINAL_STEP + 1);
+            List<BlockPos> stepPositions = STAIR_STEP_POSITIONS.get(sessionKey);
+            while (built < targetBuilt) {
+                if (built == STAIR_FINAL_STEP) {
+                    buildStairFinal(world, center, sessionKey);
+                } else {
+                    buildStairStep(world, center, sessionKey, built);
+                }
+                built++;
+            }
+            STAIR_BUILT_STEPS.put(sessionKey, built);
+            // Поднимаем временный потолок и стены вслед за постройкой (до финала)
+            if (STAIR_HATCH.get(sessionKey) == null) {
+                int builtTopY = center.getY() + built / 2;
+                int neededCeiling = builtTopY + 4;
+                int ceilingY = STAIR_CEILING_Y.getOrDefault(sessionKey, center.getY() + 5);
+                if (neededCeiling > ceilingY) {
+                    clearShaftCeiling(world, center, ceilingY);
+                    buildShaftWalls(world, center, STAIR_WALL_TOP_Y.get(sessionKey) + 1, neededCeiling);
+                    buildShaftCeiling(world, center, neededCeiling);
+                    STAIR_WALL_TOP_Y.put(sessionKey, neededCeiling);
+                    STAIR_CEILING_Y.put(sessionKey, neededCeiling);
+                }
             }
 
-            // Фаза 2: предупреждённая доска проваливается
-            planks.remove(warned);
-            WARNED_PLANK.remove(sessionKey);
-            dreamWorld.setBlockState(warned, net.minecraft.block.Blocks.AIR.getDefaultState());
+            // 2) Обрушение за спиной: ступени ниже playerStep - STAIR_COLLAPSE_BEHIND сыплются
+            int collapseUntil = Math.min(playerStep - STAIR_COLLAPSE_BEHIND, STAIR_FINAL_STEP);
+            int collapseNext = STAIR_COLLAPSE_NEXT.getOrDefault(sessionKey, 0);
+            List<BlockPos> collapseQueue = STAIR_COLLAPSE_QUEUE.get(sessionKey);
+            while (collapseNext < collapseUntil && collapseNext < stepPositions.size()) {
+                collapseQueue.add(stepPositions.get(collapseNext));
+                collapseNext++;
+            }
+            STAIR_COLLAPSE_NEXT.put(sessionKey, collapseNext);
+            if (!collapseQueue.isEmpty() && now % 2 == 0) {
+                BlockPos falling = collapseQueue.remove(0);
+                world.setBlockState(falling, net.minecraft.block.Blocks.AIR.getDefaultState());
+                STAIR_ROTTEN.get(sessionKey).remove(falling);
+                if (falling.getSquaredDistance(player.getBlockPos()) < 500) {
+                    world.playSound(null, falling, net.minecraft.sound.SoundEvents.BLOCK_WOOD_BREAK,
+                            net.minecraft.sound.SoundCategory.BLOCKS, 0.9f, 0.7f);
+                    world.spawnParticles(new net.minecraft.particle.BlockStateParticleEffect(
+                                    net.minecraft.particle.ParticleTypes.BLOCK,
+                                    net.minecraft.block.Blocks.DARK_OAK_PLANKS.getDefaultState()),
+                            falling.getX() + 0.5, falling.getY() + 0.5, falling.getZ() + 0.5,
+                            10, 0.25, 0.25, 0.25, 0.05);
+                }
+            }
 
-            // Визуальный эффект - частицы дерева
-            dreamWorld.spawnParticles(
-                    new net.minecraft.particle.BlockStateParticleEffect(
-                            net.minecraft.particle.ParticleTypes.BLOCK,
-                            net.minecraft.block.Blocks.OAK_PLANKS.getDefaultState()
-                    ),
-                    warned.getX() + 0.5, warned.getY() + 0.5, warned.getZ() + 0.5,
-                    20, // количество частиц
-                    0.3, 0.3, 0.3, // разброс
-                    0.1 // скорость
-            );
-
-            // Звук треска дерева
-            dreamWorld.playSound(null, warned,
-                    net.minecraft.sound.SoundEvents.BLOCK_WOOD_BREAK,
-                    net.minecraft.sound.SoundCategory.BLOCKS,
-                    1.0f, 0.8f);
-
-            // Ускоряем темп: интервал сокращается после каждой упавшей доски
-            int interval = COLLAPSE_INTERVAL.getOrDefault(sessionKey, COLLAPSE_INTERVAL_START);
-            interval = Math.max(COLLAPSE_INTERVAL_MIN, (int) (interval * COLLAPSE_ACCELERATION));
-            COLLAPSE_INTERVAL.put(sessionKey, interval);
-
-            if (!planks.isEmpty()) {
-                NEXT_PLANK_REMOVAL.put(sessionKey, now + interval);
+            // 3) Гнилые ступени: скрип-предупреждение и пролом под ногами
+            java.util.Set<BlockPos> rotten = STAIR_ROTTEN.get(sessionKey);
+            BlockPos supportPos = net.minecraft.util.math.BlockPos.ofFloored(
+                    player.getX(), player.getY() - 0.5, player.getZ());
+            if (rotten.contains(supportPos) && player.isOnGround()) {
+                int stand = STAIR_ROTTEN_STAND.getOrDefault(playerId, 0) + 1;
+                STAIR_ROTTEN_STAND.put(playerId, stand);
+                if (stand == 1 || stand % 5 == 0) {
+                    world.playSound(null, supportPos, net.minecraft.sound.SoundEvents.BLOCK_WOOD_HIT,
+                            net.minecraft.sound.SoundCategory.BLOCKS, 0.9f, 0.5f);
+                }
+                if (stand >= STAIR_ROTTEN_BREAK_TICKS) {
+                    rotten.remove(supportPos);
+                    STAIR_ROTTEN_STAND.remove(playerId);
+                    world.setBlockState(supportPos, net.minecraft.block.Blocks.AIR.getDefaultState());
+                    world.playSound(null, supportPos, net.minecraft.sound.SoundEvents.BLOCK_WOOD_BREAK,
+                            net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.6f);
+                    world.spawnParticles(new net.minecraft.particle.BlockStateParticleEffect(
+                                    net.minecraft.particle.ParticleTypes.BLOCK,
+                                    net.minecraft.block.Blocks.WARPED_PLANKS.getDefaultState()),
+                            supportPos.getX() + 0.5, supportPos.getY() + 0.5, supportPos.getZ() + 0.5,
+                            20, 0.3, 0.3, 0.3, 0.08);
+                    SanityManager.get(player).addSanity(STAIR_ROTTEN_SANITY);
+                    player.sendMessage(net.minecraft.text.Text.literal(
+                            "§7Гнилая ступень не выдержала!"), true);
+                }
             } else {
-                // Все доски исчезли - игрок упадёт в пустоту
-                // Очищаем только если группа пуста
-                if (!SharedDreamSession.hasOtherPlayers(playerId, active.dreamId())) {
-                    clearFallingPlanksData(sessionKey);
+                STAIR_ROTTEN_STAND.remove(playerId);
+            }
+            if (now % 15 == 0) {
+                int shown = 0;
+                for (BlockPos rotPos : rotten) {
+                    if (shown >= 5) break;
+                    if (rotPos.getSquaredDistance(player.getBlockPos()) < 200) {
+                        world.spawnParticles(net.minecraft.particle.ParticleTypes.WITCH,
+                                rotPos.getX() + 0.5, rotPos.getY() + 1.0, rotPos.getZ() + 0.5,
+                                1, 0.15, 0.05, 0.15, 0.0);
+                        shown++;
+                    }
+                }
+            }
+
+            // 4) Последняя безопасная точка и мягкая ловля падения
+            if (player.isOnGround() && Math.abs(supportPos.getX() - center.getX()) <= 4
+                    && Math.abs(supportPos.getZ() - center.getZ()) <= 4) {
+                var supportBlock = world.getBlockState(supportPos).getBlock();
+                if (supportBlock == net.minecraft.block.Blocks.DARK_OAK_STAIRS
+                        || supportBlock == net.minecraft.block.Blocks.WARPED_STAIRS
+                        || supportBlock == net.minecraft.block.Blocks.DARK_OAK_PLANKS
+                        || supportBlock == net.minecraft.block.Blocks.POLISHED_DEEPSLATE) {
+                    STAIR_LAST_SAFE.put(playerId, player.getPos());
+                }
+            }
+            net.minecraft.util.math.Vec3d lastSafe = STAIR_LAST_SAFE.get(playerId);
+            if (lastSafe != null && player.getY() < lastSafe.y - STAIR_FALL_CATCH_DEPTH) {
+                player.fallDistance = 0.0f;
+                player.teleport(world, lastSafe.x, lastSafe.y, lastSafe.z,
+                        player.getYaw(), player.getPitch());
+                player.damage(world.getDamageSources().fall(), STAIR_FALL_DAMAGE);
+                SanityManager.get(player).addSanity(STAIR_FALL_SANITY);
+                player.sendMessage(net.minecraft.text.Text.literal(
+                        "§7Ты срываешься в темноту пролёта... и приходишь в себя на ступенях."), true);
+                world.playSound(null, lastSafe.x, lastSafe.y, lastSafe.z,
+                        net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
+                        net.minecraft.sound.SoundCategory.PLAYERS, 0.8f, 0.6f);
+            }
+
+            // 5) Подсказки и сообщение об обрыве
+            if (playerStep < 6 && STAIR_HATCH.get(sessionKey) == null && now % 120 == 0) {
+                player.sendMessage(net.minecraft.text.Text.literal(
+                        "§7Лестница зовёт наверх. Она обрушается за спиной — не стой на месте."), true);
+            }
+            if (playerStep >= STAIR_FINAL_STEP && !STAIR_FINAL_ANNOUNCED.getOrDefault(sessionKey, false)) {
+                STAIR_FINAL_ANNOUNCED.put(sessionKey, true);
+                player.sendMessage(net.minecraft.text.Text.literal(
+                        "§7Лестница обрывается. Выше — только темнота... и люк."), true);
+                world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                        net.minecraft.sound.SoundEvents.ENTITY_WARDEN_HEARTBEAT,
+                        net.minecraft.sound.SoundCategory.AMBIENT, 1.0f, 0.8f);
+            }
+
+            // 6) Люк: ванильное открытие ПКМ (или если сломали) — свет и пробуждение
+            BlockPos hatch = STAIR_HATCH.get(sessionKey);
+            if (hatch != null) {
+                Long wakeTick = STAIR_WAKE_TICK.get(sessionKey);
+                if (wakeTick == null) {
+                    var hatchState = world.getBlockState(hatch);
+                    boolean opened = hatchState.isAir()
+                            || (hatchState.getBlock() == net.minecraft.block.Blocks.SPRUCE_TRAPDOOR
+                                && hatchState.get(net.minecraft.block.TrapdoorBlock.OPEN));
+                    if (opened) {
+                        STAIR_WAKE_TICK.put(sessionKey, now + 25);
+                        player.sendMessage(net.minecraft.text.Text.literal(
+                                "§6Свет бьёт в глаза... ты просыпаешься."), true);
+                        world.playSound(null, hatch, net.minecraft.sound.SoundEvents.ENTITY_PLAYER_LEVELUP,
+                                net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
+                        world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                                hatch.getX() + 0.5, hatch.getY() - 1.5, hatch.getZ() + 0.5,
+                                30, 0.3, 1.2, 0.3, 0.02);
+                    } else if (hatch.getSquaredDistance(player.getBlockPos()) < 36 && now % 60 == 0) {
+                        player.sendMessage(net.minecraft.text.Text.literal(
+                                "§7ПКМ по люку в потолке — выход из сна."), true);
+                    }
+                } else if (now >= wakeTick) {
+                    wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
+                    continue;
                 }
             }
         }
     }
 
-    /**
-     * ДОБАВЛЕНО: выбор доски-жертвы: с шансом COLLAPSE_CHASE_CHANCE — ближайшая к игроку,
-     * иначе случайная. Именно эта "погоня" заставляет игрока постоянно двигаться.
-     */
-    private static BlockPos pickPlankTarget(List<BlockPos> planks, ServerPlayerEntity player) {
-        if (planks.size() > 1 && RANDOM.nextDouble() < COLLAPSE_CHASE_CHANCE) {
-            BlockPos nearest = planks.get(0);
-            double best = nearest.getSquaredDistance(player.getBlockPos());
-            for (BlockPos pos : planks) {
-                double dist = pos.getSquaredDistance(player.getBlockPos());
-                if (dist < best) {
-                    best = dist;
-                    nearest = pos;
-                }
-            }
-            return nearest;
-        }
-        return planks.get(RANDOM.nextInt(planks.size()));
-    }
-
-    /** ДОБАВЛЕНО: полная очистка per-player данных сна "Падающие доски" */
-    private static void clearFallingPlanksData(UUID playerId) {
-        FALLING_PLANKS_PLATFORMS.remove(playerId);
-        NEXT_PLANK_REMOVAL.remove(playerId);
-        WARNED_PLANK.remove(playerId);
-        COLLAPSE_INTERVAL.remove(playerId);
+    /** ДОБАВЛЕНО: полная очистка per-session данных сна "Лестница в никуда" */
+    private static void clearFallingPlanksData(UUID sessionKey) {
+        STAIR_ORIGIN.remove(sessionKey);
+        STAIR_BUILT_STEPS.remove(sessionKey);
+        STAIR_STEP_POSITIONS.remove(sessionKey);
+        STAIR_COLLAPSE_NEXT.remove(sessionKey);
+        STAIR_COLLAPSE_QUEUE.remove(sessionKey);
+        STAIR_ROTTEN.remove(sessionKey);
+        STAIR_HATCH.remove(sessionKey);
+        STAIR_CEILING_Y.remove(sessionKey);
+        STAIR_WALL_TOP_Y.remove(sessionKey);
+        STAIR_WAKE_TICK.remove(sessionKey);
+        STAIR_FINAL_ANNOUNCED.remove(sessionKey);
     }
 
     /**
@@ -1994,9 +2229,9 @@ public final class DreamManager {
     private static final Map<UUID, UUID> FEAST_TOAST_ITEM = new HashMap<>();
     /** Всего блюд за пир — после них подают кубок */
     private static final int FEAST_COURSES = 5;
-    /** Пауза между блюдами (~15 сек); первая подача через 10 сек */
-    private static final int FEAST_DISH_INTERVAL = 300;
-    private static final int FEAST_FIRST_DISH_DELAY = 200;
+    /** Пауза между блюдами (~8 сек); первая подача через 5 сек */
+    private static final int FEAST_DISH_INTERVAL = 160;
+    private static final int FEAST_FIRST_DISH_DELAY = 100;
     /** Блюдо ждёт решения игрока 20 секунд, потом судьи обиженно убирают его */
     private static final int FEAST_DISH_LIFETIME = 400;
     /** Рассудок за исходы блюд: съел свежее / съел тронутое / сжёг тронутое /
@@ -2906,6 +3141,10 @@ public final class DreamManager {
         ItemEntity dish = new ItemEntity(world,
                 plate.getX() + 0.5, plate.getY() + 1.0, plate.getZ() + 0.5, stack);
         dish.setNeverDespawn();
+        // ИСПРАВЛЕНО (фидбек "поджигаю блюдо, а судьи думают, что я его взял"): блюдо
+        // нельзя подобрать с пола — пикап срабатывал раньше ПКМ и считался поеданием.
+        // Теперь всё осознанно: ПКМ рукой = съесть, ПКМ зажигалкой = сжечь.
+        dish.setPickupDelay(32767);
         dish.setGlowing(true);
         world.spawnEntity(dish);
 
@@ -2921,7 +3160,7 @@ public final class DreamManager {
                     .getPlayer(sessionKey);
             if (player != null) {
                 player.sendMessage(net.minecraft.text.Text.literal(
-                        "§6Первое блюдо. Свежее — отведай (подойди или ПКМ), тронутое (зелёный дым) — сожги Зажигалкой (ПКМ по блюду)."),
+                        "§6Первое блюдо. Свежее — отведай (ПКМ по блюду), тронутое (зелёный дым) — сожги Зажигалкой."),
                         true);
             }
         }
