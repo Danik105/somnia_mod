@@ -435,8 +435,8 @@ public final class DreamManager {
             // ИЗМЕНЕНО: используем groupId вместо player.getUuid() для ключа общего стейта
             bossUuid = spawnDreamMonsters(dreamWorld, spawnPos, dream, groupId);
 
-            // ДОБАВЛЕНО (сон "Лестница в никуда", редизайн "Падающих досок"): лестничная шахта
-            // над пустотой — спиральный марш достраивается вверх по мере подъёма игрока.
+            // ДОБАВЛЕНО (сон "Лестница в никуда", редизайн "Падающих досок"): подъезд многоэтажки
+            // над пустотой — марши достраиваются вверх по мере подъёма игрока.
             // ИЗМЕНЕНО: используем groupId вместо player.getUuid() для ключа общего стейта
             if (dream.id().equals(SomniumMod.id("falling_planks"))) {
                 setupStairwell(dreamWorld, spawnPos, groupId);
@@ -1765,10 +1765,13 @@ public final class DreamManager {
      * достраиваются по мере подъёма (см. tickFallingPlanks).
      */
     private static void setupStairwell(ServerWorld world, BlockPos center, UUID sessionKey) {
-        // Стены подъезда: мятный призмарин, от восьми блоков ниже входа ("из темноты") до +5
-        buildShaftWalls(world, center, center.getY() - 8, center.getY() + 5);
+        // ВАЖНО: center — это точка, куда телепортируются НОГИ игрока (см. enterDream).
+        // Поэтому пол первого этажа строится на center.y - 1 (см. buildStairStage) —
+        // иначе игрок оказывается ногами внутри блока пола и его выталкивает в пустоту.
+        // Стены подъезда: мятный призмарин, от восьми блоков ниже входа ("из темноты") до +10
+        buildShaftWalls(world, center, center.getY() - 8, center.getY() + 10);
         // Временный потолок — поднимается по мере постройки маршей
-        buildShaftCeiling(world, center, center.getY() + 5);
+        buildShaftCeiling(world, center, center.getY() + 10);
 
         STAIR_ORIGIN.put(sessionKey, center);
         STAIR_STAGE_BLOCKS.put(sessionKey, new ArrayList<>());
@@ -1776,8 +1779,8 @@ public final class DreamManager {
         STAIR_COLLAPSE_QUEUE.put(sessionKey, new ArrayList<>());
         STAIR_ROTTEN.put(sessionKey, new java.util.HashSet<>());
         STAIR_HATCH.remove(sessionKey);
-        STAIR_CEILING_Y.put(sessionKey, center.getY() + 5);
-        STAIR_WALL_TOP_Y.put(sessionKey, center.getY() + 5);
+        STAIR_CEILING_Y.put(sessionKey, center.getY() + 10);
+        STAIR_WALL_TOP_Y.put(sessionKey, center.getY() + 10);
         STAIR_WAKE_TICK.remove(sessionKey);
         STAIR_FINAL_ANNOUNCED.remove(sessionKey);
 
@@ -1829,12 +1832,15 @@ public final class DreamManager {
      * (x -2..-1, z -2..-9, +0.5 за ступень); 2 — междуэтажная площадка с окном в тьму
      * (z -12..-10, +4); 3 — марш на юг вдоль восточной стены (x 1..2, z -9..-2, +4.5..+8).
      * Перила — железная решётка вдоль пролёта (x=0), как в настоящем подъезде.
+     * ВАЖНО: блоки пола строятся на center.y - 1 — ноги игрока телепортируются на center.y,
+     * то есть на ВЕРХНЮЮ грань площадки. Ступени поднимаются ровно по +0.5 от поверхности
+     * площадки и стыкуются с ней вровень, без прыжков.
      */
     private static void buildStairStage(ServerWorld world, BlockPos center, UUID sessionKey, int stage) {
         List<BlockPos> blocks = new ArrayList<>();
         int floor = stage / 4;
         int part = stage % 4;
-        int baseY = center.getY() + floor * 8;
+        int baseY = center.getY() - 1 + floor * 8; // блок площадки этажа (верх грани = уровень ног)
 
         if (part == 0) {
             // Площадка этажа
@@ -1853,7 +1859,9 @@ public final class DreamManager {
                             west ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST));
             blocks.add(torchPos);
         } else if (part == 1 || part == 3) {
-            // Марш: 8 ступеней в два ряда вдоль стены + перила вдоль пролёта
+            // Марш: 8 ступеней в два ряда вдоль стены + перила вдоль пролёта.
+            // Ступень i стоит на marchBaseY + 1 + i/2: первая на +0.5 над площадкой,
+            // последняя вровень со следующей площадкой — марш идёт без прыжков.
             boolean first = part == 1;
             int marchBaseY = first ? baseY : baseY + 4;
             int startZ = first ? -2 : -9;
@@ -1863,7 +1871,7 @@ public final class DreamManager {
                     ? net.minecraft.util.math.Direction.SOUTH : net.minecraft.util.math.Direction.NORTH;
             for (int i = 0; i < 8; i++) {
                 int z = first ? startZ - i : startZ + i;
-                int y = marchBaseY + i / 2;
+                int y = marchBaseY + 1 + i / 2;
                 var half = i % 2 == 0 ? net.minecraft.block.enums.BlockHalf.BOTTOM
                                       : net.minecraft.block.enums.BlockHalf.TOP;
                 boolean rotten = floor >= STAIR_ROTTEN_START_FLOOR
@@ -1876,23 +1884,22 @@ public final class DreamManager {
                             .with(net.minecraft.block.StairsBlock.FACING, downhill)
                             .with(net.minecraft.block.StairsBlock.HALF, half));
                     blocks.add(pos);
-                    if (rotten) STAIR_ROTTEN.get(sessionKey).add(pos);
+                    if (rotten) {
+                        STAIR_ROTTEN.get(sessionKey).add(pos);
+                    } else {
+                        // Подступенок под целой ступенью — марш выглядит монолитным,
+                        // под гнилой ступенью остаётся пустота, чтобы было куда провалиться
+                        BlockPos riser = new BlockPos(center.getX() + x, y - 1, center.getZ() + z);
+                        if (world.getBlockState(riser).isAir()) {
+                            world.setBlockState(riser, net.minecraft.block.Blocks.POLISHED_ANDESITE.getDefaultState());
+                            blocks.add(riser);
+                        }
+                    }
                 }
                 // Перила над ступенью вдоль пролёта
                 BlockPos rail = new BlockPos(center.getX(), y + 1, center.getZ() + z);
                 world.setBlockState(rail, net.minecraft.block.Blocks.IRON_BARS.getDefaultState());
                 blocks.add(rail);
-            }
-            // Факел душ над серединой марша на стене маршей
-            int midY = marchBaseY + 4;
-            int midZ = first ? -5 : -6;
-            BlockPos torchPos = new BlockPos(center.getX() + (first ? -2 : 2), midY, center.getZ() + midZ);
-            if (world.getBlockState(torchPos).isAir()) {
-                world.setBlockState(torchPos, net.minecraft.block.Blocks.SOUL_WALL_TORCH.getDefaultState()
-                        .with(net.minecraft.block.WallTorchBlock.FACING,
-                                first ? net.minecraft.util.math.Direction.EAST
-                                      : net.minecraft.util.math.Direction.WEST));
-                blocks.add(torchPos);
             }
         } else {
             // Междуэтажная площадка с окном в темноту — как на референсе
@@ -1904,11 +1911,11 @@ public final class DreamManager {
                     blocks.add(pos);
                 }
             }
-            // Окно в торцевой стене — за ним только тьма пустоты
+            // Окно в торцевой стене — цельное стекло 2×2 вровень со стеной, за ним тьма пустоты
             for (int x = -1; x <= 0; x++) {
                 for (int y = landY + 1; y <= landY + 2; y++) {
                     world.setBlockState(new BlockPos(center.getX() + x, y, center.getZ() - 13),
-                            net.minecraft.block.Blocks.GLASS_PANE.getDefaultState());
+                            net.minecraft.block.Blocks.GLASS.getDefaultState());
                 }
             }
             // Факел душ над площадкой
@@ -1925,7 +1932,7 @@ public final class DreamManager {
 
     /** Финал: площадка последнего этажа, глухой потолок и люк со светом пробуждения за ним. */
     private static void buildStairFinal(ServerWorld world, BlockPos center, UUID sessionKey) {
-        int landingY = center.getY() + STAIR_FLOORS * 8;
+        int landingY = center.getY() - 1 + STAIR_FLOORS * 8; // как в buildStairStage: пол на блок ниже уровня ног
         List<BlockPos> blocks = new ArrayList<>();
         for (int x = -2; x <= 2; x++) {
             for (int z = -1; z <= 0; z++) {
@@ -2086,10 +2093,12 @@ public final class DreamManager {
                 }
             }
 
-            // 4) Последняя безопасная точка и мягкая ловля падения
+            // 4) Последняя безопасная точка и мягкая ловля падения.
+            // ВАЖНО: гнилые ступени не запоминаем — иначе после пролома телепортировало бы
+            // обратно в пустое место, и игрок падал бы по кругу до смерти.
             int dz = supportPos.getZ() - center.getZ();
             if (player.isOnGround() && Math.abs(supportPos.getX() - center.getX()) <= 3
-                    && dz >= -13 && dz <= 1) {
+                    && dz >= -13 && dz <= 1 && !rotten.contains(supportPos)) {
                 var supportBlock = world.getBlockState(supportPos).getBlock();
                 if (supportBlock == net.minecraft.block.Blocks.POLISHED_ANDESITE_STAIRS
                         || supportBlock == net.minecraft.block.Blocks.WARPED_STAIRS
