@@ -1263,6 +1263,7 @@ public final class DreamManager {
         FEAST_TABLES.remove(dreamStateKey);
         FEAST_DISH_ITEM.remove(dreamStateKey);
         FEAST_DISH_TAINTED.remove(dreamStateKey);
+        FEAST_DISH_TAKEN.remove(dreamStateKey);
         FEAST_DISH_DEADLINE.remove(dreamStateKey);
         NEXT_DISH_TICK.remove(dreamStateKey);
         FEAST_COURSES_DONE.remove(dreamStateKey);
@@ -1704,28 +1705,30 @@ public final class DreamManager {
     }
 
     // ==================== ДОБАВЛЕНО (сон "Лестница в никуда", редизайн "Падающих досок") ====================
-    // Игрок оказывается на дне тёмной лестничной клетки, как в многоэтажке. Спиральный
-    // марш по стенам достраивается вверх по мере подъёма, а ступени за спиной обрушаются.
-    // Выше начинаются гнилые ступени (бирюзовые, дымятся) — ломаются под ногами. На третьем
-    // витке лестница резко обрывается: площадка, глухой потолок и люк — выход из сна.
+    // Классическая лестничная клетка многоэтажки (по референсу игрока): мятные призмариновые
+    // стены, серые бетонные марши вдоль стен с решётчатыми перилами вдоль пролёта, окна
+    // между этажами, выходящие в тьму. Этаж = площадка + марш + площадка + марш (+8 высоты).
+    // Марши достраиваются вверх по мере подъёма и обрушаются за спиной. С третьего этажа —
+    // гнилые ступени (бирюзовые, дымятся). На последнем этаже лестница обрывается:
+    // глухой потолок и люк — выход из сна.
 
-    /** Центр шахты (позиция спавна игрока) для каждой сессии */
+    /** Центр входной площадки (спавн игрока) для каждой сессии */
     private static final Map<UUID, BlockPos> STAIR_ORIGIN = new HashMap<>();
-    /** Индекс следующей непостроенной ступени */
-    private static final Map<UUID, Integer> STAIR_BUILT_STEPS = new HashMap<>();
-    /** Индекс ступени -> её позиция (нужно для обрушения за спиной) */
-    private static final Map<UUID, List<BlockPos>> STAIR_STEP_POSITIONS = new HashMap<>();
-    /** Индекс следующей ступени, которую предстоит обрушить */
+    /** Индекс следующего непостроенного фрагмента (площадка/марш) */
+    private static final Map<UUID, Integer> STAIR_BUILT_STAGES = new HashMap<>();
+    /** Индекс фрагмента -> его блоки (для обрушения за спиной) */
+    private static final Map<UUID, List<List<BlockPos>>> STAIR_STAGE_BLOCKS = new HashMap<>();
+    /** Индекс следующего фрагмента на обрушение */
     private static final Map<UUID, Integer> STAIR_COLLAPSE_NEXT = new HashMap<>();
-    /** Очередь позиций на обрушение — сыплем по одной ступени за пару тиков */
+    /** Очередь блоков на обрушение — сыплем по одному за пару тиков */
     private static final Map<UUID, List<BlockPos>> STAIR_COLLAPSE_QUEUE = new HashMap<>();
     /** Гнилые ступени (не держат вес) */
     private static final Map<UUID, java.util.Set<BlockPos>> STAIR_ROTTEN = new HashMap<>();
-    /** Позиция люка в потолке финальной площадки — выход из сна */
+    /** Позиция люка в потолке последнего этажа — выход из сна */
     private static final Map<UUID, BlockPos> STAIR_HATCH = new HashMap<>();
-    /** Текущая высота временного потолка шахты (поднимается по мере постройки) */
+    /** Текущая высота временного потолка подъезда (поднимается по мере постройки) */
     private static final Map<UUID, Integer> STAIR_CEILING_Y = new HashMap<>();
-    /** Верх построенной части стен шахты */
+    /** Верх построенной части стен подъезда */
     private static final Map<UUID, Integer> STAIR_WALL_TOP_Y = new HashMap<>();
     /** Тик пробуждения после открытия люка */
     private static final Map<UUID, Long> STAIR_WAKE_TICK = new HashMap<>();
@@ -1736,21 +1739,16 @@ public final class DreamManager {
     /** Сколько тиков игрок стоит на гнилой ступени (per-player) */
     private static final Map<UUID, Integer> STAIR_ROTTEN_STAND = new HashMap<>();
 
-    /** Кольцо периметра шахты 7×7 (x,z ∈ -3..3) по часовой стрелке от северо-западного угла */
-    private static final int[][] STAIR_RING = {
-            {-3, -3}, {-2, -3}, {-1, -3}, {0, -3}, {1, -3}, {2, -3}, {3, -3},
-            {3, -2}, {3, -1}, {3, 0}, {3, 1}, {3, 2}, {3, 3},
-            {2, 3}, {1, 3}, {0, 3}, {-1, 3}, {-2, 3}, {-3, 3},
-            {-3, 2}, {-3, 1}, {-3, 0}, {-3, -1}, {-3, -2}
-    };
-    /** Финал — 3 витка (72 ступени, +36 высоты): лестница резко обрывается */
-    private static final int STAIR_FINAL_STEP = 72;
-    /** Сколько ступеней строим вперёд от игрока */
-    private static final int STAIR_BUILD_AHEAD = 30;
-    /** Ступени ниже этого отставания от игрока обрушаются */
-    private static final int STAIR_COLLAPSE_BEHIND = 12;
-    /** Гниль начинается с 30-й ступени (вторая половина подъёма) */
-    private static final int STAIR_ROTTEN_START_STEP = 30;
+    /** Этажей в подъезде; этаж = 4 фрагмента (площадка, марш, площадка, марш), +8 высоты */
+    private static final int STAIR_FLOORS = 5;
+    /** Финальный фрагмент — площадка последнего этажа с люком */
+    private static final int STAIR_FINAL_STAGE = STAIR_FLOORS * 4;
+    /** Сколько фрагментов строим вперёд от игрока */
+    private static final int STAIR_BUILD_AHEAD = 3;
+    /** Фрагменты ниже этого отставания от игрока обрушаются */
+    private static final int STAIR_COLLAPSE_BEHIND = 3;
+    /** Гниль начинается с третьего этажа (индекс 2) */
+    private static final int STAIR_ROTTEN_START_FLOOR = 2;
     private static final double STAIR_ROTTEN_CHANCE = 0.15;
     /** Через сколько тиков стояния гнилая ступень ломается */
     private static final int STAIR_ROTTEN_BREAK_TICKS = 15;
@@ -1761,29 +1759,19 @@ public final class DreamManager {
     private static final float STAIR_ROTTEN_SANITY = -2.0f;
 
     /**
-     * ДОБАВЛЕНО (сон "Лестница в никуда"): строит низ лестничной клетки — тёмную шахту
-     * 7×7 с полированным глубинносланцевым полом и стенами, уходящими вниз в пустоту.
-     * Ступени достраиваются по мере подъёма (см. tickFallingPlanks).
+     * ДОБАВЛЕНО (сон "Лестница в никуда"): строит низ подъезда — мятные стены, уходящие
+     * вниз в пустоту, временный потолок и сразу весь первый этаж (площадка под спавном,
+     // первый марш, междуэтажная площадка с окном, второй марш). Дальше марши
+     * достраиваются по мере подъёма (см. tickFallingPlanks).
      */
     private static void setupStairwell(ServerWorld world, BlockPos center, UUID sessionKey) {
-        // Пол шахты
-        for (int x = -3; x <= 3; x++) {
-            for (int z = -3; z <= 3; z++) {
-                world.setBlockState(center.add(x, -1, z),
-                        net.minecraft.block.Blocks.POLISHED_DEEPSLATE.getDefaultState());
-            }
-        }
-        // Стены: от восьми блоков ниже пола (шахта "растёт из темноты") до +5
+        // Стены подъезда: мятный призмарин, от восьми блоков ниже входа ("из темноты") до +5
         buildShaftWalls(world, center, center.getY() - 8, center.getY() + 5);
-        // Временный потолок — поднимается по мере постройки лестницы
+        // Временный потолок — поднимается по мере постройки маршей
         buildShaftCeiling(world, center, center.getY() + 5);
-        // Факел душ у входа
-        world.setBlockState(center.add(3, 1, -3), net.minecraft.block.Blocks.SOUL_WALL_TORCH.getDefaultState()
-                .with(net.minecraft.block.WallTorchBlock.FACING, net.minecraft.util.math.Direction.WEST));
 
         STAIR_ORIGIN.put(sessionKey, center);
-        STAIR_BUILT_STEPS.put(sessionKey, 0);
-        STAIR_STEP_POSITIONS.put(sessionKey, new ArrayList<>());
+        STAIR_STAGE_BLOCKS.put(sessionKey, new ArrayList<>());
         STAIR_COLLAPSE_NEXT.put(sessionKey, 0);
         STAIR_COLLAPSE_QUEUE.put(sessionKey, new ArrayList<>());
         STAIR_ROTTEN.put(sessionKey, new java.util.HashSet<>());
@@ -1792,121 +1780,187 @@ public final class DreamManager {
         STAIR_WALL_TOP_Y.put(sessionKey, center.getY() + 5);
         STAIR_WAKE_TICK.remove(sessionKey);
         STAIR_FINAL_ANNOUNCED.remove(sessionKey);
+
+        // Первый этаж строим сразу — игрок спавнится на его площадке
+        for (int stage = 0; stage <= 3; stage++) {
+            buildStairStage(world, center, sessionKey, stage);
+        }
+        STAIR_BUILT_STAGES.put(sessionKey, 4);
     }
 
-    /** Стены шахты: кольцо 9×9 (x,z = ±4) из глубинносланца с кирпичными поясами, слои y0..y1. */
+    /** Стены подъезда: мятный призмарин с поясами из призмариновых кирпичей, слои y0..y1. */
     private static void buildShaftWalls(ServerWorld world, BlockPos center, int y0, int y1) {
         for (int y = y0; y <= y1; y++) {
             boolean band = Math.floorMod(y - center.getY(), 4) == 0;
-            for (int x = -4; x <= 4; x++) {
-                for (int z = -4; z <= 4; z++) {
-                    if (Math.abs(x) != 4 && Math.abs(z) != 4) continue;
+            var block = band ? net.minecraft.block.Blocks.PRISMARINE_BRICKS
+                             : net.minecraft.block.Blocks.PRISMARINE;
+            for (int x = -3; x <= 3; x++) {
+                for (int z = -13; z <= 1; z++) {
+                    if (Math.abs(x) != 3 && z != -13 && z != 1) continue;
                     world.setBlockState(new BlockPos(center.getX() + x, y, center.getZ() + z),
-                            band ? net.minecraft.block.Blocks.DEEPSLATE_BRICKS.getDefaultState()
-                                 : net.minecraft.block.Blocks.POLISHED_DEEPSLATE.getDefaultState());
+                            block.getDefaultState());
                 }
             }
         }
     }
 
-    /** Потолок шахты 7×7 на заданной высоте. */
+    /** Потолок над всей клеткой (5×15) на заданной высоте. */
     private static void buildShaftCeiling(ServerWorld world, BlockPos center, int y) {
-        for (int x = -3; x <= 3; x++) {
-            for (int z = -3; z <= 3; z++) {
-                world.setBlockState(new BlockPos(center.getX() + x, y, center.getZ() + z),
-                        net.minecraft.block.Blocks.POLISHED_DEEPSLATE.getDefaultState());
-            }
-        }
+        fillShaftCeiling(world, center, y, net.minecraft.block.Blocks.PRISMARINE_BRICKS.getDefaultState());
     }
 
     /** Снимает временный потолок (при подъёме или перед постройкой финального). */
     private static void clearShaftCeiling(ServerWorld world, BlockPos center, int y) {
-        for (int x = -3; x <= 3; x++) {
-            for (int z = -3; z <= 3; z++) {
-                world.setBlockState(new BlockPos(center.getX() + x, y, center.getZ() + z),
-                        net.minecraft.block.Blocks.AIR.getDefaultState());
+        fillShaftCeiling(world, center, y, net.minecraft.block.Blocks.AIR.getDefaultState());
+    }
+
+    private static void fillShaftCeiling(ServerWorld world, BlockPos center, int y,
+                                         net.minecraft.block.BlockState state) {
+        for (int x = -2; x <= 2; x++) {
+            for (int z = -13; z <= 1; z++) {
+                world.setBlockState(new BlockPos(center.getX() + x, y, center.getZ() + z), state);
             }
         }
     }
 
-    /** Строит ступень idx спирального марша: кольцо периметра, +0.5 высоты за ступень. */
-    private static void buildStairStep(ServerWorld world, BlockPos center, UUID sessionKey, int idx) {
-        int[] cell = STAIR_RING[idx % STAIR_RING.length];
-        int y = center.getY() + idx / 2;
-        BlockPos pos = new BlockPos(center.getX() + cell[0], y, center.getZ() + cell[1]);
+    /**
+     * Строит один фрагмент подъезда. Этаж f (+8 высоты) состоит из четырёх фрагментов:
+     * 0 — площадка этажа (x -2..2, z -1..0); 1 — марш на север вдоль западной стены
+     * (x -2..-1, z -2..-9, +0.5 за ступень); 2 — междуэтажная площадка с окном в тьму
+     * (z -12..-10, +4); 3 — марш на юг вдоль восточной стены (x 1..2, z -9..-2, +4.5..+8).
+     * Перила — железная решётка вдоль пролёта (x=0), как в настоящем подъезде.
+     */
+    private static void buildStairStage(ServerWorld world, BlockPos center, UUID sessionKey, int stage) {
+        List<BlockPos> blocks = new ArrayList<>();
+        int floor = stage / 4;
+        int part = stage % 4;
+        int baseY = center.getY() + floor * 8;
 
-        // Ступень смотрит "лицом" к предыдущей (вниз по маршу)
-        int[] prev = STAIR_RING[Math.floorMod(idx - 1, STAIR_RING.length)];
-        int dx = prev[0] - cell[0];
-        int dz = prev[1] - cell[1];
-        net.minecraft.util.math.Direction facing =
-                dx == 1 ? net.minecraft.util.math.Direction.EAST :
-                dx == -1 ? net.minecraft.util.math.Direction.WEST :
-                dz == 1 ? net.minecraft.util.math.Direction.SOUTH :
-                net.minecraft.util.math.Direction.NORTH;
-
-        boolean rotten = idx >= STAIR_ROTTEN_START_STEP && RANDOM.nextDouble() < STAIR_ROTTEN_CHANCE;
-        var block = rotten ? net.minecraft.block.Blocks.WARPED_STAIRS
-                           : net.minecraft.block.Blocks.DARK_OAK_STAIRS;
-        world.setBlockState(pos, block.getDefaultState()
-                .with(net.minecraft.block.StairsBlock.FACING, facing)
-                .with(net.minecraft.block.StairsBlock.HALF,
-                        idx % 2 == 0 ? net.minecraft.block.enums.BlockHalf.BOTTOM
-                                     : net.minecraft.block.enums.BlockHalf.TOP));
-        STAIR_STEP_POSITIONS.get(sessionKey).add(pos);
-        if (rotten) {
-            STAIR_ROTTEN.get(sessionKey).add(pos);
-        }
-
-        // Факел душ на стене над каждой шестой ступенью — мрачная подсветка марша
-        if (idx % 6 == 0) {
-            net.minecraft.util.math.Direction intoShaft =
-                    cell[0] == -3 ? net.minecraft.util.math.Direction.EAST :
-                    cell[0] == 3 ? net.minecraft.util.math.Direction.WEST :
-                    cell[1] == -3 ? net.minecraft.util.math.Direction.SOUTH :
-                    net.minecraft.util.math.Direction.NORTH;
-            BlockPos torchPos = new BlockPos(pos.getX(), y + 2, pos.getZ());
+        if (part == 0) {
+            // Площадка этажа
+            for (int x = -2; x <= 2; x++) {
+                for (int z = -1; z <= 0; z++) {
+                    BlockPos pos = new BlockPos(center.getX() + x, baseY, center.getZ() + z);
+                    world.setBlockState(pos, net.minecraft.block.Blocks.POLISHED_ANDESITE.getDefaultState());
+                    blocks.add(pos);
+                }
+            }
+            // Факел душ на боковой стене площадки (сторона чередуется по этажам)
+            boolean west = floor % 2 == 0;
+            BlockPos torchPos = new BlockPos(center.getX() + (west ? -2 : 2), baseY + 2, center.getZ());
+            world.setBlockState(torchPos, net.minecraft.block.Blocks.SOUL_WALL_TORCH.getDefaultState()
+                    .with(net.minecraft.block.WallTorchBlock.FACING,
+                            west ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST));
+            blocks.add(torchPos);
+        } else if (part == 1 || part == 3) {
+            // Марш: 8 ступеней в два ряда вдоль стены + перила вдоль пролёта
+            boolean first = part == 1;
+            int marchBaseY = first ? baseY : baseY + 4;
+            int startZ = first ? -2 : -9;
+            int stepX1 = first ? -2 : 1;
+            int stepX2 = first ? -1 : 2;
+            net.minecraft.util.math.Direction downhill = first
+                    ? net.minecraft.util.math.Direction.SOUTH : net.minecraft.util.math.Direction.NORTH;
+            for (int i = 0; i < 8; i++) {
+                int z = first ? startZ - i : startZ + i;
+                int y = marchBaseY + i / 2;
+                var half = i % 2 == 0 ? net.minecraft.block.enums.BlockHalf.BOTTOM
+                                      : net.minecraft.block.enums.BlockHalf.TOP;
+                boolean rotten = floor >= STAIR_ROTTEN_START_FLOOR
+                        && RANDOM.nextDouble() < STAIR_ROTTEN_CHANCE;
+                var stepBlock = rotten ? net.minecraft.block.Blocks.WARPED_STAIRS
+                                       : net.minecraft.block.Blocks.POLISHED_ANDESITE_STAIRS;
+                for (int x : new int[] {stepX1, stepX2}) {
+                    BlockPos pos = new BlockPos(center.getX() + x, y, center.getZ() + z);
+                    world.setBlockState(pos, stepBlock.getDefaultState()
+                            .with(net.minecraft.block.StairsBlock.FACING, downhill)
+                            .with(net.minecraft.block.StairsBlock.HALF, half));
+                    blocks.add(pos);
+                    if (rotten) STAIR_ROTTEN.get(sessionKey).add(pos);
+                }
+                // Перила над ступенью вдоль пролёта
+                BlockPos rail = new BlockPos(center.getX(), y + 1, center.getZ() + z);
+                world.setBlockState(rail, net.minecraft.block.Blocks.IRON_BARS.getDefaultState());
+                blocks.add(rail);
+            }
+            // Факел душ над серединой марша на стене маршей
+            int midY = marchBaseY + 4;
+            int midZ = first ? -5 : -6;
+            BlockPos torchPos = new BlockPos(center.getX() + (first ? -2 : 2), midY, center.getZ() + midZ);
             if (world.getBlockState(torchPos).isAir()) {
                 world.setBlockState(torchPos, net.minecraft.block.Blocks.SOUL_WALL_TORCH.getDefaultState()
-                        .with(net.minecraft.block.WallTorchBlock.FACING, intoShaft));
+                        .with(net.minecraft.block.WallTorchBlock.FACING,
+                                first ? net.minecraft.util.math.Direction.EAST
+                                      : net.minecraft.util.math.Direction.WEST));
+                blocks.add(torchPos);
             }
+        } else {
+            // Междуэтажная площадка с окном в темноту — как на референсе
+            int landY = baseY + 4;
+            for (int x = -2; x <= 2; x++) {
+                for (int z = -12; z <= -10; z++) {
+                    BlockPos pos = new BlockPos(center.getX() + x, landY, center.getZ() + z);
+                    world.setBlockState(pos, net.minecraft.block.Blocks.POLISHED_ANDESITE.getDefaultState());
+                    blocks.add(pos);
+                }
+            }
+            // Окно в торцевой стене — за ним только тьма пустоты
+            for (int x = -1; x <= 0; x++) {
+                for (int y = landY + 1; y <= landY + 2; y++) {
+                    world.setBlockState(new BlockPos(center.getX() + x, y, center.getZ() - 13),
+                            net.minecraft.block.Blocks.GLASS_PANE.getDefaultState());
+                }
+            }
+            // Факел душ над площадкой
+            boolean west = floor % 2 == 0;
+            BlockPos torchPos = new BlockPos(center.getX() + (west ? -2 : 2), landY + 2, center.getZ() - 11);
+            world.setBlockState(torchPos, net.minecraft.block.Blocks.SOUL_WALL_TORCH.getDefaultState()
+                    .with(net.minecraft.block.WallTorchBlock.FACING,
+                            west ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST));
+            blocks.add(torchPos);
         }
+
+        STAIR_STAGE_BLOCKS.get(sessionKey).add(blocks);
     }
 
-    /** Финал: лестница обрывается — площадка в углу, глухой потолок и люк со светом за ним. */
+    /** Финал: площадка последнего этажа, глухой потолок и люк со светом пробуждения за ним. */
     private static void buildStairFinal(ServerWorld world, BlockPos center, UUID sessionKey) {
-        int platformY = center.getY() + STAIR_FINAL_STEP / 2;
-        // Площадка в северо-западном углу (последняя ступень витка сама ведёт на неё)
-        for (int[] cell : new int[][] {{-3, -3}, {-2, -3}, {-2, -2}}) {
-            world.setBlockState(new BlockPos(center.getX() + cell[0], platformY, center.getZ() + cell[1]),
-                    net.minecraft.block.Blocks.DARK_OAK_PLANKS.getDefaultState());
+        int landingY = center.getY() + STAIR_FLOORS * 8;
+        List<BlockPos> blocks = new ArrayList<>();
+        for (int x = -2; x <= 2; x++) {
+            for (int z = -1; z <= 0; z++) {
+                BlockPos pos = new BlockPos(center.getX() + x, landingY, center.getZ() + z);
+                world.setBlockState(pos, net.minecraft.block.Blocks.POLISHED_ANDESITE.getDefaultState());
+                blocks.add(pos);
+            }
         }
-        // Стены до потолка и глухой финальный потолок вместо временного
-        int ceilingY = platformY + 5;
+        STAIR_STAGE_BLOCKS.get(sessionKey).add(blocks);
+        // Глухой финальный потолок вместо временного
+        int ceilingY = landingY + 5;
         clearShaftCeiling(world, center, STAIR_CEILING_Y.get(sessionKey));
         buildShaftWalls(world, center, STAIR_WALL_TOP_Y.get(sessionKey) + 1, ceilingY);
         buildShaftCeiling(world, center, ceilingY);
         STAIR_WALL_TOP_Y.put(sessionKey, ceilingY);
         STAIR_CEILING_Y.put(sessionKey, ceilingY);
         // Люк над площадкой — за ним свет пробуждения
-        BlockPos hatch = new BlockPos(center.getX() - 3, ceilingY, center.getZ() - 3);
+        BlockPos hatch = new BlockPos(center.getX(), ceilingY, center.getZ());
         world.setBlockState(hatch, net.minecraft.block.Blocks.SPRUCE_TRAPDOOR.getDefaultState()
                 .with(net.minecraft.block.TrapdoorBlock.HALF, net.minecraft.block.enums.BlockHalf.BOTTOM)
                 .with(net.minecraft.block.TrapdoorBlock.OPEN, false));
         world.setBlockState(hatch.up(), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
         STAIR_HATCH.put(sessionKey, hatch);
         // Факел душ на площадке
-        world.setBlockState(new BlockPos(center.getX() - 2, platformY + 1, center.getZ() - 3),
+        world.setBlockState(new BlockPos(center.getX() - 2, landingY + 2, center.getZ()),
                 net.minecraft.block.Blocks.SOUL_WALL_TORCH.getDefaultState()
-                        .with(net.minecraft.block.WallTorchBlock.FACING, net.minecraft.util.math.Direction.SOUTH));
+                        .with(net.minecraft.block.WallTorchBlock.FACING, net.minecraft.util.math.Direction.EAST));
     }
 
     /**
-     * ИЗМЕНЕНО (сон "Лестница в никуда", бывш. "Падающие доски"): спиральный марш
-     * достраивается вверх по мере подъёма, ступени обрушаются за спиной, гнилые ступени
+     * ИЗМЕНЕНО (сон "Лестница в никуда", бывш. "Падающие доски"): подъезд многоэтажки —
+     * марши достраиваются вверх по мере подъёма и обрушаются за спиной, гнилые ступени
      * ломаются под ногами, падение мягко возвращает на последнюю безопасную точку.
-     * Выход — люк в потолке финальной площадки (открывается обычным ПКМ).
-     * Поражение — смерть во сне или падение в пустоту вне шахты (checkFallingPlanksVoidFall).
+     * Выход — люк в потолке последнего этажа (открывается обычным ПКМ).
+     * Поражение — смерть во сне или падение в пустоту вне лестницы (checkFallingPlanksVoidFall).
      */
     public static void tickFallingPlanks(MinecraftServer server) {
         if (ACTIVE.isEmpty()) return;
@@ -1924,34 +1978,37 @@ public final class DreamManager {
             BlockPos center = STAIR_ORIGIN.get(sessionKey);
             if (center == null) continue;
 
-            // 0) Защита сцены: в шахте не должно быть монстров вообще
+            // 0) Защита сцены: на лестнице не должно быть монстров вообще
             if (now % 10 == 0) {
                 for (net.minecraft.entity.mob.MobEntity mob : world.getEntitiesByClass(
                         net.minecraft.entity.mob.MobEntity.class,
-                        new net.minecraft.util.math.Box(center).expand(20, 50, 20),
+                        new net.minecraft.util.math.Box(center).expand(20, 55, 20),
                         e -> e instanceof net.minecraft.entity.mob.Monster)) {
                     mob.discard();
                 }
             }
 
-            // 1) Текущая "ступень" игрока по высоте и достройка марша вперёд
-            int playerStep = (int) Math.max(0, Math.round((player.getY() - center.getY()) * 2));
-            int built = STAIR_BUILT_STEPS.getOrDefault(sessionKey, 0);
-            int targetBuilt = Math.min(playerStep + STAIR_BUILD_AHEAD, STAIR_FINAL_STEP + 1);
-            List<BlockPos> stepPositions = STAIR_STEP_POSITIONS.get(sessionKey);
+            // 1) На каком фрагменте игрок (по высоте) и достройка марша вперёд
+            double relY = player.getY() - center.getY();
+            int floor = Math.max(0, (int) Math.floor(relY / 8.0));
+            double r = relY - floor * 8;
+            int part = r < 0.75 ? 0 : r < 4.25 ? 1 : r < 4.75 ? 2 : 3;
+            int playerStage = Math.min(floor * 4 + part, STAIR_FINAL_STAGE);
+
+            int built = STAIR_BUILT_STAGES.getOrDefault(sessionKey, 0);
+            int targetBuilt = Math.min(playerStage + STAIR_BUILD_AHEAD + 1, STAIR_FINAL_STAGE + 1);
             while (built < targetBuilt) {
-                if (built == STAIR_FINAL_STEP) {
+                if (built == STAIR_FINAL_STAGE) {
                     buildStairFinal(world, center, sessionKey);
                 } else {
-                    buildStairStep(world, center, sessionKey, built);
+                    buildStairStage(world, center, sessionKey, built);
                 }
                 built++;
             }
-            STAIR_BUILT_STEPS.put(sessionKey, built);
+            STAIR_BUILT_STAGES.put(sessionKey, built);
             // Поднимаем временный потолок и стены вслед за постройкой (до финала)
             if (STAIR_HATCH.get(sessionKey) == null) {
-                int builtTopY = center.getY() + built / 2;
-                int neededCeiling = builtTopY + 4;
+                int neededCeiling = center.getY() + built * 2 + 4;
                 int ceilingY = STAIR_CEILING_Y.getOrDefault(sessionKey, center.getY() + 5);
                 if (neededCeiling > ceilingY) {
                     clearShaftCeiling(world, center, ceilingY);
@@ -1962,12 +2019,13 @@ public final class DreamManager {
                 }
             }
 
-            // 2) Обрушение за спиной: ступени ниже playerStep - STAIR_COLLAPSE_BEHIND сыплются
-            int collapseUntil = Math.min(playerStep - STAIR_COLLAPSE_BEHIND, STAIR_FINAL_STEP);
+            // 2) Обрушение за спиной: фрагменты ниже playerStage - STAIR_COLLAPSE_BEHIND
+            int collapseUntil = Math.min(playerStage - STAIR_COLLAPSE_BEHIND, STAIR_FINAL_STAGE);
             int collapseNext = STAIR_COLLAPSE_NEXT.getOrDefault(sessionKey, 0);
+            List<List<BlockPos>> stageBlocks = STAIR_STAGE_BLOCKS.get(sessionKey);
             List<BlockPos> collapseQueue = STAIR_COLLAPSE_QUEUE.get(sessionKey);
-            while (collapseNext < collapseUntil && collapseNext < stepPositions.size()) {
-                collapseQueue.add(stepPositions.get(collapseNext));
+            while (collapseNext < collapseUntil && collapseNext < stageBlocks.size()) {
+                collapseQueue.addAll(stageBlocks.get(collapseNext));
                 collapseNext++;
             }
             STAIR_COLLAPSE_NEXT.put(sessionKey, collapseNext);
@@ -1976,11 +2034,11 @@ public final class DreamManager {
                 world.setBlockState(falling, net.minecraft.block.Blocks.AIR.getDefaultState());
                 STAIR_ROTTEN.get(sessionKey).remove(falling);
                 if (falling.getSquaredDistance(player.getBlockPos()) < 500) {
-                    world.playSound(null, falling, net.minecraft.sound.SoundEvents.BLOCK_WOOD_BREAK,
+                    world.playSound(null, falling, net.minecraft.sound.SoundEvents.BLOCK_STONE_BREAK,
                             net.minecraft.sound.SoundCategory.BLOCKS, 0.9f, 0.7f);
                     world.spawnParticles(new net.minecraft.particle.BlockStateParticleEffect(
                                     net.minecraft.particle.ParticleTypes.BLOCK,
-                                    net.minecraft.block.Blocks.DARK_OAK_PLANKS.getDefaultState()),
+                                    net.minecraft.block.Blocks.POLISHED_ANDESITE.getDefaultState()),
                             falling.getX() + 0.5, falling.getY() + 0.5, falling.getZ() + 0.5,
                             10, 0.25, 0.25, 0.25, 0.05);
                 }
@@ -2029,13 +2087,13 @@ public final class DreamManager {
             }
 
             // 4) Последняя безопасная точка и мягкая ловля падения
-            if (player.isOnGround() && Math.abs(supportPos.getX() - center.getX()) <= 4
-                    && Math.abs(supportPos.getZ() - center.getZ()) <= 4) {
+            int dz = supportPos.getZ() - center.getZ();
+            if (player.isOnGround() && Math.abs(supportPos.getX() - center.getX()) <= 3
+                    && dz >= -13 && dz <= 1) {
                 var supportBlock = world.getBlockState(supportPos).getBlock();
-                if (supportBlock == net.minecraft.block.Blocks.DARK_OAK_STAIRS
+                if (supportBlock == net.minecraft.block.Blocks.POLISHED_ANDESITE_STAIRS
                         || supportBlock == net.minecraft.block.Blocks.WARPED_STAIRS
-                        || supportBlock == net.minecraft.block.Blocks.DARK_OAK_PLANKS
-                        || supportBlock == net.minecraft.block.Blocks.POLISHED_DEEPSLATE) {
+                        || supportBlock == net.minecraft.block.Blocks.POLISHED_ANDESITE) {
                     STAIR_LAST_SAFE.put(playerId, player.getPos());
                 }
             }
@@ -2047,21 +2105,21 @@ public final class DreamManager {
                 player.damage(world.getDamageSources().fall(), STAIR_FALL_DAMAGE);
                 SanityManager.get(player).addSanity(STAIR_FALL_SANITY);
                 player.sendMessage(net.minecraft.text.Text.literal(
-                        "§7Ты срываешься в темноту пролёта... и приходишь в себя на ступенях."), true);
+                        "§7Ты срываешься в пролёт... и приходишь в себя на ступенях."), true);
                 world.playSound(null, lastSafe.x, lastSafe.y, lastSafe.z,
                         net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
                         net.minecraft.sound.SoundCategory.PLAYERS, 0.8f, 0.6f);
             }
 
             // 5) Подсказки и сообщение об обрыве
-            if (playerStep < 6 && STAIR_HATCH.get(sessionKey) == null && now % 120 == 0) {
+            if (playerStage < 2 && STAIR_HATCH.get(sessionKey) == null && now % 120 == 0) {
                 player.sendMessage(net.minecraft.text.Text.literal(
-                        "§7Лестница зовёт наверх. Она обрушается за спиной — не стой на месте."), true);
+                        "§7Подъезд уходит вверх. Ступени обрушаются за спиной — не стой на месте."), true);
             }
-            if (playerStep >= STAIR_FINAL_STEP && !STAIR_FINAL_ANNOUNCED.getOrDefault(sessionKey, false)) {
+            if (playerStage >= STAIR_FINAL_STAGE && !STAIR_FINAL_ANNOUNCED.getOrDefault(sessionKey, false)) {
                 STAIR_FINAL_ANNOUNCED.put(sessionKey, true);
                 player.sendMessage(net.minecraft.text.Text.literal(
-                        "§7Лестница обрывается. Выше — только темнота... и люк."), true);
+                        "§7Последний этаж. Лестница обрывается — выше только темнота и люк."), true);
                 world.playSound(null, player.getX(), player.getY(), player.getZ(),
                         net.minecraft.sound.SoundEvents.ENTITY_WARDEN_HEARTBEAT,
                         net.minecraft.sound.SoundCategory.AMBIENT, 1.0f, 0.8f);
@@ -2100,8 +2158,8 @@ public final class DreamManager {
     /** ДОБАВЛЕНО: полная очистка per-session данных сна "Лестница в никуда" */
     private static void clearFallingPlanksData(UUID sessionKey) {
         STAIR_ORIGIN.remove(sessionKey);
-        STAIR_BUILT_STEPS.remove(sessionKey);
-        STAIR_STEP_POSITIONS.remove(sessionKey);
+        STAIR_BUILT_STAGES.remove(sessionKey);
+        STAIR_STAGE_BLOCKS.remove(sessionKey);
         STAIR_COLLAPSE_NEXT.remove(sessionKey);
         STAIR_COLLAPSE_QUEUE.remove(sessionKey);
         STAIR_ROTTEN.remove(sessionKey);
@@ -2262,6 +2320,10 @@ public final class DreamManager {
     /** NBT-метки сонных предметов пира — по ним же чистим инвентарь при пробуждении */
     private static final String FEAST_LIGHTER_TAG = "somnium_feast_lighter";
     private static final String FEAST_TOAST_TAG = "somnium_feast_toast";
+    private static final String FEAST_DISH_TAG = "somnium_feast_dish";
+    private static final String FEAST_DISH_TAINTED_TAG = "somnium_feast_tainted";
+    /** Блюдо снято со стола в инвентарь — курс всё ещё ждёт решения (съесть/сжечь) */
+    private static final Map<UUID, Boolean> FEAST_DISH_TAKEN = new HashMap<>();
 
     /** ДОБАВЛЕНО: Сон-в-сне - сохранённые блоки чанка для каждого игрока */
     private static final Map<UUID, ChunkSnapshot> DREAM_WITHIN_DREAM_CHUNKS = new HashMap<>();
@@ -3052,31 +3114,56 @@ public final class DreamManager {
                 }
             }
 
-            // 1) На столе активное блюдо — ждём решения игрока
+            // 1) Активное блюдо ждёт решения: съесть (ПКМ рукой по блюду на столе или из
+            //    инвентаря) или сжечь зажигалкой (по блюду на столе или брошенному)
             UUID dishUuid = FEAST_DISH_ITEM.get(sessionKey);
-            if (dishUuid != null) {
-                var dish = world.getEntity(dishUuid);
+            boolean dishTaken = FEAST_DISH_TAKEN.getOrDefault(sessionKey, false);
+            if (dishUuid != null || dishTaken) {
                 boolean tainted = FEAST_DISH_TAINTED.getOrDefault(sessionKey, false);
-                if (dish == null || !dish.isAlive()) {
-                    // Блюдо исчезло — игрок его подобрал ("отведал")
-                    finishCourse(sessionKey, now);
-                    eatDish(player, world, sessionKey, tainted);
-                } else {
-                    // Тронутое блюдо дымится зелёным — внимательный игрок заметит
-                    if (tainted && now % 10 == 0) {
+
+                // Блюдо исчезло со стола — игрок взял его в инвентарь (это НЕ поедание!)
+                if (!dishTaken && (dishUuid == null || world.getEntity(dishUuid) == null)) {
+                    FEAST_DISH_ITEM.remove(sessionKey);
+                    FEAST_DISH_TAKEN.put(sessionKey, true);
+                    dishTaken = true;
+                    player.sendMessage(net.minecraft.text.Text.literal(
+                            "§7Блюдо у тебя. Отведай его — или брось (Q) и сожги зажигалкой (ПКМ)."), true);
+                }
+
+                // Тронутое блюдо на столе дымится зелёным — внимательный игрок заметит
+                if (!dishTaken && dishUuid != null && tainted && now % 10 == 0) {
+                    var dish = world.getEntity(dishUuid);
+                    if (dish != null) {
                         world.spawnParticles(net.minecraft.particle.ParticleTypes.WITCH,
                                 dish.getX(), dish.getY() + 0.4, dish.getZ(),
                                 3, 0.15, 0.1, 0.15, 0.01);
                     }
-                    if (now >= FEAST_DISH_DEADLINE.getOrDefault(sessionKey, now)) {
-                        // Игрок проигнорировал блюдо — судьи обиженно убирают его сами
-                        dish.discard();
+                }
+
+                // Игрок ест блюдо из инвентаря — засчитываем, когда доел до конца
+                if (player.isUsingItem()) {
+                    ItemStack eating = player.getActiveItem();
+                    if (isFeastDish(eating) && player.getItemUseTime() >= eating.getMaxUseTime() - 2) {
+                        boolean eatenTainted = isTaintedDish(eating);
                         finishCourse(sessionKey, now);
-                        SanityManager.get(player).addSanity(FEAST_IGNORED_SANITY);
-                        player.sendMessage(net.minecraft.text.Text.literal(
-                                "§7Судьи молча убирают нетронутое блюдо... Они обижены."), true);
-                        judgesReact(world, sessionKey, FeastReaction.ANGRY, null);
+                        eatDish(player, world, sessionKey, eatenTainted);
+                        continue;
                     }
+                }
+
+                // Дедлайн: судьи убирают нерешённое блюдо — со стола, из рук или с пола
+                if (now >= FEAST_DISH_DEADLINE.getOrDefault(sessionKey, now)) {
+                    if (!dishTaken && dishUuid != null) {
+                        var dish = world.getEntity(dishUuid);
+                        if (dish != null) dish.discard();
+                    } else {
+                        removeFeastDish(player, world, sessionKey);
+                    }
+                    finishCourse(sessionKey, now);
+                    SanityManager.get(player).addSanity(FEAST_IGNORED_SANITY);
+                    player.sendMessage(net.minecraft.text.Text.literal(
+                            "§7Судьи молча убирают нетронутое блюдо... Они обижены."), true);
+                    judgesReact(world, sessionKey, FeastReaction.ANGRY, null);
                 }
                 continue;
             }
@@ -3114,6 +3201,7 @@ public final class DreamManager {
     private static void finishCourse(UUID sessionKey, long now) {
         FEAST_DISH_ITEM.remove(sessionKey);
         FEAST_DISH_TAINTED.remove(sessionKey);
+        FEAST_DISH_TAKEN.remove(sessionKey);
         FEAST_COURSES_DONE.put(sessionKey, FEAST_COURSES_DONE.getOrDefault(sessionKey, 0) + 1);
         NEXT_DISH_TICK.put(sessionKey, now + FEAST_DISH_INTERVAL);
     }
@@ -3138,13 +3226,14 @@ public final class DreamManager {
 
         ItemStack stack = new ItemStack(dishItem);
         stack.setCustomName(net.minecraft.text.Text.literal("§6Блюдо пира"));
+        // ИЗМЕНЕНО (фидбек "предметы не поднимаются"): блюдо МОЖНО взять в инвентарь —
+        // NBT-метки сохраняются при подборе. Еда засчитывается при реальном поедании
+        // из руки (как кубок), сжигание — ПКМ зажигалкой по блюду на столе или брошенному.
+        stack.getOrCreateNbt().putBoolean(FEAST_DISH_TAG, true);
+        stack.getOrCreateNbt().putBoolean(FEAST_DISH_TAINTED_TAG, tainted);
         ItemEntity dish = new ItemEntity(world,
                 plate.getX() + 0.5, plate.getY() + 1.0, plate.getZ() + 0.5, stack);
         dish.setNeverDespawn();
-        // ИСПРАВЛЕНО (фидбек "поджигаю блюдо, а судьи думают, что я его взял"): блюдо
-        // нельзя подобрать с пола — пикап срабатывал раньше ПКМ и считался поеданием.
-        // Теперь всё осознанно: ПКМ рукой = съесть, ПКМ зажигалкой = сжечь.
-        dish.setPickupDelay(32767);
         dish.setGlowing(true);
         world.spawnEntity(dish);
 
@@ -3160,7 +3249,7 @@ public final class DreamManager {
                     .getPlayer(sessionKey);
             if (player != null) {
                 player.sendMessage(net.minecraft.text.Text.literal(
-                        "§6Первое блюдо. Свежее — отведай (ПКМ по блюду), тронутое (зелёный дым) — сожги Зажигалкой."),
+                        "§6Первое блюдо. Возьми и отведай — а если оно тронуто (зелёный дым), сожги Зажигалкой (ПКМ)."),
                         true);
             }
         }
@@ -3237,6 +3326,14 @@ public final class DreamManager {
             return net.minecraft.util.ActionResult.SUCCESS;
         }
 
+        // ПКМ зажигалкой по БРОШЕННОМУ блюду (лежит на полу) — сжечь на месте
+        if (entity instanceof ItemEntity itemEntity && isFeastDish(itemEntity.getStack())) {
+            if (isFeastLighter(player.getStackInHand(hand)) || isFeastLighter(player.getMainHandStack())) {
+                burnDish(player, world, sessionKey, entity, isTaintedDish(itemEntity.getStack()), now);
+                return net.minecraft.util.ActionResult.SUCCESS;
+            }
+        }
+
         // ПКМ по Кубку Тоста — взять в руки (питьё ловится в tickCrimsonFeast)
         UUID toastUuid = FEAST_TOAST_ITEM.get(sessionKey);
         if (toastUuid != null && toastUuid.equals(entity.getUuid())) {
@@ -3277,12 +3374,20 @@ public final class DreamManager {
         }
     }
 
-    /** Игрок поджёг блюдо Зажигалкой судей: зрелищное горение на столе и реакция судей. */
+    /** Игрок поджёг блюдо Зажигалкой судей: зрелищное горение и реакция судей. */
     private static void burnDish(ServerPlayerEntity player, ServerWorld world, UUID sessionKey,
                                  net.minecraft.entity.Entity dish, boolean tainted, long now) {
         dish.setFireTicks(FEAST_BURN_TICKS + 20);
+        // Горящее блюдо нельзя подобрать обратно — оно уже "решено"
+        if (dish instanceof ItemEntity dishItem) {
+            dishItem.setPickupDelay(32767);
+        }
         FEAST_BURNING_DISHES.put(dish.getUuid(), now + FEAST_BURN_TICKS);
-        finishCourse(sessionKey, now);
+        // Засчитываем курс, только если блюдо действительно ждало решения
+        if (FEAST_DISH_ITEM.containsKey(sessionKey)
+                || FEAST_DISH_TAKEN.getOrDefault(sessionKey, false)) {
+            finishCourse(sessionKey, now);
+        }
         BlockPos dishPos = dish.getBlockPos();
         world.playSound(null, dishPos, net.minecraft.sound.SoundEvents.ITEM_FLINTANDSTEEL_USE,
                 net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 1.0f);
@@ -3426,12 +3531,40 @@ public final class DreamManager {
         return false;
     }
 
+    private static boolean isFeastDish(ItemStack stack) {
+        return stack.getNbt() != null && stack.getNbt().getBoolean(FEAST_DISH_TAG);
+    }
+
+    private static boolean isTaintedDish(ItemStack stack) {
+        return isFeastDish(stack) && stack.getNbt().getBoolean(FEAST_DISH_TAINTED_TAG);
+    }
+
+    /** Судьи забирают нерешённое блюдо: из инвентаря игрока или лежащее рядом со столом. */
+    private static void removeFeastDish(ServerPlayerEntity player, ServerWorld world, UUID sessionKey) {
+        var inventory = player.getInventory();
+        for (int i = 0; i < inventory.size(); i++) {
+            if (isFeastDish(inventory.getStack(i))) {
+                inventory.setStack(i, ItemStack.EMPTY);
+                return;
+            }
+        }
+        List<BlockPos> plates = FEAST_TABLES.get(sessionKey);
+        if (plates == null || plates.isEmpty()) return;
+        BlockPos mid = plates.get(plates.size() / 2);
+        for (ItemEntity item : world.getEntitiesByClass(ItemEntity.class,
+                new net.minecraft.util.math.Box(mid).expand(12, 6, 12),
+                e -> isFeastDish(e.getStack()))) {
+            item.discard();
+            return;
+        }
+    }
+
     /** Сонные предметы пира нельзя выносить в реальный мир — снимаем при пробуждении. */
     private static void removeFeastItems(ServerPlayerEntity player) {
         var inventory = player.getInventory();
         for (int i = 0; i < inventory.size(); i++) {
             ItemStack stack = inventory.getStack(i);
-            if (isFeastLighter(stack) || isToastGoblet(stack)) {
+            if (isFeastLighter(stack) || isToastGoblet(stack) || isFeastDish(stack)) {
                 inventory.setStack(i, ItemStack.EMPTY);
             }
         }
