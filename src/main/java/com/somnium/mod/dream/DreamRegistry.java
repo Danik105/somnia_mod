@@ -127,13 +127,14 @@ public final class DreamRegistry {
                 DreamObjectiveType.REACH_DOOR, null, 0
         ));
 
-        // БЕЗ ИЗМЕНЕНИЙ: Пустошь зеркал - BOSS_KILL (победить Двойника)
+        // ИЗМЕНЕНО: Зеркальные пустоши - BOSS_KILL, механика "Резонанс Двойника":
+        // Двойник зеркалит позицию игрока через Разлом; долгий контакт = болезненная синхронизация
         list.add(new DreamType(
                 SomniumMod.id("mirror_wastes"), "somnium.dream.mirror_wastes",
                 "somnium:mirror_wastes_procedural",
                 List.of(SomniumMod.id("mirrored_double")),
                 18, 100f, 6600L,
-                "Уничтожить своего Двойника, не разбив ни одного зеркала-осколка.",
+                "Твой Двойник зеркалит каждый твой шаг через Разлом. Сблизиться с ним можно лишь у самого центра — но три секунды контакта замкнут связь, и она рвётся болью. Бей короткими заходами и убей Двойника.",
                 DreamObjectiveType.BOSS_KILL, SomniumMod.id("mirrored_double"), 0
         ));
 

@@ -439,6 +439,12 @@ public final class DreamManager {
                 setupCrimsonFeastTable(dreamWorld, spawnPos, groupId);
             }
 
+            // ДОБАВЛЕНО (сон "Зеркальные пустоши", механика "Резонанс Двойника"): Разлом —
+            // точка симметрии в 8 блоках к северу от спавна (см. setupMirrorWastesArena)
+            if (dream.id().equals(SomniumMod.id("mirror_wastes"))) {
+                setupMirrorWastesArena(dreamWorld, spawnPos, groupId);
+            }
+
             // ДОБАВЛЕНО ("задание сна нельзя выполнить"): раньше цель сна была только текстом в HUD —
             // ничего в коде её не отслеживало, поэтому единственным способом закончить сон было
             // дождаться таймаута или умереть. Теперь при входе в сон реально готовится то, что нужно
@@ -560,6 +566,9 @@ public final class DreamManager {
         // ДОБАВЛЕНО (сон "Зеркальная комната"): специальный спавн для зеркального двойника
         boolean isMirrorRoom = dream.id().equals(SomniumMod.id("mirror_room"));
 
+        // ДОБАВЛЕНО (сон "Зеркальные пустоши"): Двойник спавнится строго в зеркальной точке
+        boolean isMirrorWastes = dream.id().equals(SomniumMod.id("mirror_wastes"));
+
         // ДОБАВЛЕНО (сон "Обрушающаяся шахта"): специальный спавн монстров в лабиринте
         boolean isCollapsingMine = dream.id().equals(SomniumMod.id("collapsing_mine"));
 
@@ -578,11 +587,26 @@ public final class DreamManager {
                 // (X=7 от угла комнаты), за стеклянной стеной, а не в случайном месте
                 // ИЗМЕНЕНО: используем sessionKey вместо playerId для доступа к общему стейту
                 bossSpawnPos = getMirrorMonsterSpawnPos(center, sessionKey);
+            } else if (isMirrorWastes) {
+                // ДОБАВЛЕНО (сон "Зеркальные пустоши"): Двойник появляется точно в зеркальной
+                // точке относительно Разлома — игрок сразу видит свою "копию" напротив центра
+                BlockPos riftCenter = MIRROR_WASTES_CENTER.get(sessionKey);
+                bossSpawnPos = riftCenter != null
+                        ? riftCenter.add(riftCenter.subtract(center))
+                        : randomRingPosition(world, center, BOSS_SPAWN_MIN_RADIUS, BOSS_SPAWN_MAX_RADIUS);
             } else {
                 bossSpawnPos = randomRingPosition(world, center, BOSS_SPAWN_MIN_RADIUS, BOSS_SPAWN_MAX_RADIUS);
             }
             var boss = spawnOneAt(world, dream.objectiveTargetId(), bossSpawnPos);
-            if (boss != null) bossUuid = boss.getUuid();
+            if (boss != null) {
+                bossUuid = boss.getUuid();
+                // ДОБАВЛЕНО (сон "Зеркальные пустоши"): сообщаем Двойнику точку симметрии,
+                // через которую он зеркалит движения игрока (см. MirroredDoubleEntity)
+                if (boss instanceof com.somnium.mod.entity.nightmare.MirroredDoubleEntity doubleEntity) {
+                    BlockPos riftCenter = MIRROR_WASTES_CENTER.get(sessionKey);
+                    if (riftCenter != null) doubleEntity.setMirrorCenter(riftCenter);
+                }
+            }
         }
 
         // ДОБАВЛЕНО: для лабиринта используем специальный спавн в случайных ячейках
@@ -1060,6 +1084,14 @@ public final class DreamManager {
             }
         }
 
+        // ИСПРАВЛЕНИЕ (утечка per-dream стейта в общем сне): все карты состояния снов
+        // (стол пира, лабиринт, центр Разлома и т.п.) ключуются sessionKey (groupId), а
+        // leaveSession() ниже отвязывает игрока от группы — после него sessionKey() вернёт уже
+        // UUID самого игрока. Фиксируем ключ ДО выхода из сессии, чтобы блок очистки в конце
+        // wake() удалял записи по тому же ключу, по которому они создавались (для одиночного
+        // игрока sessionKey == playerId, поведение не меняется).
+        UUID dreamStateKey = sessionKey(player.getUuid());
+
         // ДОБАВЛЕНО: удаляем игрока из активного сеанса сна
         SharedDreamSession.leaveSession(player.getUuid(), active.dreamId());
 
@@ -1132,30 +1164,36 @@ public final class DreamManager {
         WakeDoorTracker.onDreamEnd(player.getUuid());
 
         // ДОБАВЛЕНО (сон "Падающие доски"): очищаем данные о платформе при пробуждении
-        clearFallingPlanksData(player.getUuid());
+        // ИСПРАВЛЕНО: карты платформ ключуются sessionKey — см. dreamStateKey выше
+        clearFallingPlanksData(dreamStateKey);
 
         // ДОБАВЛЕНО (сон "Зеркальная комната"): очищаем данные о стекле при пробуждении
-        MIRROR_ROOM_GLASS.remove(player.getUuid());
-        MIRROR_GLASS_BREAK_TIME.remove(player.getUuid());
-        MIRROR_ROOM_CORNER.remove(player.getUuid());
+        // ИСПРАВЛЕНО: ключи sessionKey — см. dreamStateKey выше (PENDING_MIRROR_INIT намеренно
+        // остаётся по playerId — он кладётся под UUID игрока, см. enterDreamWithType)
+        MIRROR_ROOM_GLASS.remove(dreamStateKey);
+        MIRROR_GLASS_BREAK_TIME.remove(dreamStateKey);
+        MIRROR_ROOM_CORNER.remove(dreamStateKey);
         PENDING_MIRROR_INIT.remove(player.getUuid());
 
         // ДОБАВЛЕНО (сон "Тонущий город"): очищаем данные об уровне воды при пробуждении
-        DROWNING_CITY_WATER_LEVEL.remove(player.getUuid());
-        DROWNING_CITY_FILL_QUEUE.remove(player.getUuid());
+        DROWNING_CITY_WATER_LEVEL.remove(dreamStateKey);
+        DROWNING_CITY_FILL_QUEUE.remove(dreamStateKey);
 
         // ДОБАВЛЕНО (сон "Обрушающаяся шахта"): очищаем данные о лабиринте при пробуждении
-        COLLAPSING_MINE_MAZES.remove(player.getUuid());
-        COLLAPSING_MINE_ORIGINS.remove(player.getUuid());
-        MINE_OPENED_PASSAGES.remove(player.getUuid());
-        NEXT_MINE_SHIFT_TICK.remove(player.getUuid());
+        COLLAPSING_MINE_MAZES.remove(dreamStateKey);
+        COLLAPSING_MINE_ORIGINS.remove(dreamStateKey);
+        MINE_OPENED_PASSAGES.remove(dreamStateKey);
+        NEXT_MINE_SHIFT_TICK.remove(dreamStateKey);
 
         // ДОБАВЛЕНО (сон "Кровавый пир"): очищаем стол, блюдо и счётчик пропусков при пробуждении
-        FEAST_TABLES.remove(player.getUuid());
-        FEAST_DISH_ITEM.remove(player.getUuid());
-        FEAST_DISH_DEADLINE.remove(player.getUuid());
-        NEXT_DISH_TICK.remove(player.getUuid());
-        FEAST_SKIPS.remove(player.getUuid());
+        FEAST_TABLES.remove(dreamStateKey);
+        FEAST_DISH_ITEM.remove(dreamStateKey);
+        FEAST_DISH_DEADLINE.remove(dreamStateKey);
+        NEXT_DISH_TICK.remove(dreamStateKey);
+        FEAST_SKIPS.remove(dreamStateKey);
+
+        // ДОБАВЛЕНО (сон "Зеркальные пустоши"): очищаем центр Разлома при пробуждении
+        MIRROR_WASTES_CENTER.remove(dreamStateKey);
 
         // ДОБАВЛЕНО (сон "Сон-в-сне"): очищаем данные о погоде при пробуждении
         DREAM_WITHIN_DREAM_ORIGINAL_POS.remove(player.getUuid());
@@ -1875,6 +1913,12 @@ public final class DreamManager {
     /** Со скольких пропусков подряд голод начинает наносить урон */
     private static final int FEAST_STARVATION_SKIPS = 3;
 
+    // ДОБАВЛЕНО (сон "Зеркальные пустоши", механика "Резонанс Двойника"):
+    /** Центр Разлома — точка симметрии, через которую Двойник зеркалит позицию игрока */
+    private static final Map<UUID, BlockPos> MIRROR_WASTES_CENTER = new HashMap<>();
+    /** На сколько блоков к северу от спавна игрока стоит Разлом */
+    private static final int MIRROR_WASTES_CENTER_OFFSET = 8;
+
     /** ДОБАВЛЕНО: Сон-в-сне - сохранённые блоки чанка для каждого игрока */
     private static final Map<UUID, ChunkSnapshot> DREAM_WITHIN_DREAM_CHUNKS = new HashMap<>();
     /** Позиция игрока в реальном мире для точного воссоздания */
@@ -2430,6 +2474,35 @@ public final class DreamManager {
         FEAST_DISH_ITEM.remove(sessionKey);
         FEAST_SKIPS.put(sessionKey, 0);
         NEXT_DISH_TICK.put(sessionKey, world.getServer().getTicks() + 200L); // первая подача через 10 сек
+    }
+
+    /**
+     * ДОБАВЛЕНО (сон "Зеркальные пустоши", механика "Резонанс Двойника"): строит Разлом —
+     * точку симметрии арены. Двойник (MirroredDoubleEntity) всегда стремится занять позицию,
+     * зеркальную позиции игрока через эту точку, поэтому сблизиться с ним можно только
+     * вблизи самого Разлома. Структура: обсидиановое основание, столб стекла с морским
+     * фонарём на вершине и четыре фонаря душ по углам — игрок должен видеть центр издалека.
+     */
+    private static void setupMirrorWastesArena(ServerWorld world, BlockPos spawnPos, UUID sessionKey) {
+        BlockPos center = spawnPos.add(0, 0, -MIRROR_WASTES_CENTER_OFFSET);
+
+        // Основание из обсидиана (уровень земли под Разломом)
+        world.setBlockState(center.down(), net.minecraft.block.Blocks.OBSIDIAN.getDefaultState());
+        // Столб треснувшего "зеркала": стекло в три блока высотой
+        for (int dy = 0; dy <= 2; dy++) {
+            world.setBlockState(center.up(dy), net.minecraft.block.Blocks.GLASS.getDefaultState());
+        }
+        // Холодный свет на вершине — маяк центра симметрии
+        world.setBlockState(center.up(3), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
+        // Четыре фонаря душ по углам очерчивают "осевую линию" Разлома
+        world.setBlockState(center.add(2, 0, 2), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
+        world.setBlockState(center.add(-2, 0, 2), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
+        world.setBlockState(center.add(2, 0, -2), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
+        world.setBlockState(center.add(-2, 0, -2), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
+
+        MIRROR_WASTES_CENTER.put(sessionKey, center);
+        SomniumMod.LOGGER.info("[Somnium] Зеркальные пустоши: Разлом построен в {} (спавн игрока {})",
+                center, spawnPos);
     }
 
     /**
