@@ -3,9 +3,7 @@
   "ingredient": {
     "item": "somnium:raw_dream"
   },
-  "result": {
-    "item": "somnium:dream_ingot"
-  },
+  "result": "somnium:dream_ingot",
   "experience": 0.7,
   "cookingtime": 200
 }

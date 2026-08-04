@@ -31,12 +31,42 @@ public class MirroredDoubleEntity extends AbstractNightmareEntity {
     @Override
     public void tick() {
         super.tick();
+        if (swapCooldown > 0) swapCooldown--;
         PlayerEntity target = this.getEntityWorld().getClosestPlayer(this, 32.0);
         if (target != null) {
             double playerDamage = target.getAttributeValue(EntityAttributes.GENERIC_ATTACK_DAMAGE);
             this.getAttributeInstance(EntityAttributes.GENERIC_ATTACK_DAMAGE)
                     .setBaseValue(Math.max(2.0, playerDamage * 0.8));
         }
+    }
+
+    // ДОБАВЛЕНО (способность "Зеркальный обмен"): при удачном ударе двойник меняется
+    // местами с игроком — зеркальная дезориентация. Перезарядка 10 секунд.
+    private int swapCooldown = 0;
+
+    @Override
+    public boolean tryAttack(net.minecraft.entity.Entity target) {
+        boolean hit = super.tryAttack(target);
+        if (hit && !this.getEntityWorld().isClient() && swapCooldown <= 0
+                && target instanceof net.minecraft.server.network.ServerPlayerEntity player) {
+            net.minecraft.util.math.Vec3d playerPos = player.getPos();
+            net.minecraft.util.math.Vec3d doublePos = this.getPos();
+            float playerYaw = player.getYaw();
+
+            player.teleport(this.getEntityWorld() instanceof net.minecraft.server.world.ServerWorld sw ? sw : null,
+                    doublePos.x, doublePos.y, doublePos.z, playerYaw + 180.0f, player.getPitch());
+            this.teleport(playerPos.x, playerPos.y, playerPos.z);
+            this.setYaw(playerYaw);
+
+            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                    net.minecraft.entity.effect.StatusEffects.NAUSEA, 100, 0));
+            this.getEntityWorld().playSound(null, this.getBlockPos(),
+                    net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
+                    this.getSoundCategory(), 1.0f, 1.4f);
+            player.sendMessage(net.minecraft.text.Text.literal("§bОтражение поменялось с тобой местами!"), true);
+            swapCooldown = 200;
+        }
+        return hit;
     }
 
     // TODO: событие "разбито зеркало рядом" -> ModEntities.MIRRORED_DOUBLE.spawn(...) клон в той же точке

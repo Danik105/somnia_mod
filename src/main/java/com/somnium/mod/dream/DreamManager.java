@@ -300,6 +300,10 @@ public final class DreamManager {
         SharedDreamSession.GroupInfo groupInfo = SharedDreamSession.getGroup(groupId);
 
         if (isLeader) {
+            // ДОБАВЛЕНО ("повторно попадаешь в сон — он не сбрасывается"): полный сброс
+            // локации от прошлого захода ДО любой генерации/постройки
+            resetDreamForNewSession(dreamWorld, dream.id(), groupId);
+
             // Лидер: генерируем мир сна и выбираем точку спавна
             spawnPos = findDreamSpawn(dreamWorld);
 
@@ -1289,8 +1293,10 @@ public final class DreamManager {
             clearMirrorWastesData(mwWorld, dreamStateKey);
         }
 
-        // ДОБАВЛЕНО (сон "Пустота с глазами"): трекинг "движа в начале"
+        // ДОБАВЛЕНО (сон "Пустота с глазами"): трекинг "движа в начале" + финал "Перехвати взгляд"
         VOE_START_TICK.remove(dreamStateKey);
+        VOE_DISPELLED.remove(dreamStateKey);
+        VOE_TOUCH_COOLDOWN.clear(); // кулдауны привязаны к сущностям сна — они исчезают вместе с ним
 
         // ДОБАВЛЕНО (сон "Сон-в-сне"): очищаем данные о погоде при пробуждении
         DREAM_WITHIN_DREAM_ORIGINAL_POS.remove(player.getUuid());
@@ -1793,6 +1799,20 @@ public final class DreamManager {
     /** Тик входа в сон (ленивая инициализация в tickVoidOfEyes) */
     private static final Map<UUID, Long> VOE_START_TICK = new HashMap<>();
 
+    // ДОБАВЛЕНО (финал "Пустоты с глазами", механика "Перехвати взгляд"):
+    // сон заканчивался только таймаутом — теперь игрок может ПОБЕДИТЬ: поймать
+    // прямой взгляд Наблюдателя на 3 секунды (60 тиков) — тот сгорает. 5 сгоревших = пробуждение.
+    /** Сколько Наблюдателей уже сожжено взглядом за этот сон (ключ — сессия) */
+    private static final Map<UUID, Integer> VOE_DISPELLED = new HashMap<>();
+    /** Прогресс прицельного взгляда по каждому Наблюдателю (ключ — UUID сущности) */
+    private static final Map<UUID, Integer> VOE_STARE_TICKS = new HashMap<>();
+    /** Кулдаун касания-атаки для каждого Наблюдателя */
+    private static final Map<UUID, Long> VOE_TOUCH_COOLDOWN = new HashMap<>();
+    /** Сколько Наблюдателей нужно сжечь для победы */
+    private static final int VOE_DISPEL_NEEDED = 5;
+    /** Сколько тиков непрерывного прицельного взгляда выдерживает Наблюдатель */
+    private static final int VOE_STARE_TO_DISPEL = 60;
+
     // ===== ДОБАВЛЕНО (сон "Пустошь зеркал", редизайн "Поймай своё отражение") =====
     /** Тик входа в сон (ленивая инициализация в tickMirrorWastes) */
     private static final Map<UUID, Long> MW_START_TICK = new HashMap<>();
@@ -1822,6 +1842,76 @@ public final class DreamManager {
     private static final Map<UUID, Integer> DREAM_PORTAL_STAND = new HashMap<>();
     /** Куда вернуть игрока в реальный мир (позиция перед входом в портал) */
     private static final Map<UUID, BlockPos> DREAM_PORTAL_RETURN = new HashMap<>();
+
+    /**
+     * ДОБАВЛЕНО ("повторно попадаешь в сон — он не сбрасывается"): полный сброс локации
+     * сна перед новым заходом. Раньше старые постройки (сломанная лестница, объедки пира,
+     * зеркала), выжившие монстры и per-session счётчики оставались от прошлого сна — игрок
+     * возвращался в "подъехавшую" локацию. Теперь: сносим всё выше платформы, убираем
+     * оставшихся сущностей и обнуляем все стейт-мапы сессии — сон начинается с чистого листа.
+     */
+    private static void resetDreamForNewSession(ServerWorld world, net.minecraft.util.Identifier dreamId, UUID sessionKey) {
+        int surfaceY = ModDimensions.platformSurfaceY(world.getRegistryKey());
+        BlockPos center = new BlockPos(0, surfaceY, 0);
+
+        // 1) Выжившие сущности прошлого захода (монстры, блюда-предметы, маркеры дверей)
+        for (var entity : world.getEntitiesByClass(net.minecraft.entity.Entity.class,
+                new net.minecraft.util.math.Box(center).expand(96, 80, 96),
+                e -> !(e instanceof net.minecraft.entity.player.PlayerEntity)
+                        && !(e instanceof com.somnium.mod.entity.SleepingBodyEntity))) {
+            entity.discard();
+        }
+
+        // 2) Строительные сны: сносим старые постройки над платформой (саму платформу не трогаем)
+        boolean structural = dreamId.equals(SomniumMod.id("falling_planks"))
+                || dreamId.equals(SomniumMod.id("crimson_feast"))
+                || dreamId.equals(SomniumMod.id("mirror_wastes"))
+                || dreamId.equals(SomniumMod.id("mirror_room"))
+                || dreamId.equals(SomniumMod.id("void_of_eyes"));
+        if (structural) {
+            net.minecraft.block.BlockState air = net.minecraft.block.Blocks.AIR.getDefaultState();
+            BlockPos.Mutable pos = new BlockPos.Mutable();
+            for (int x = -24; x <= 24; x++) {
+                for (int z = -24; z <= 24; z++) {
+                    for (int y = surfaceY; y <= surfaceY + 48; y++) {
+                        pos.set(x, y, z);
+                        if (!world.getBlockState(pos).isAir()) {
+                            world.setBlockState(pos, air, 2);
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3) Обнуляем все per-session стейт-мапы
+        STAIR_ORIGIN.remove(sessionKey); STAIR_BUILT_STAGES.remove(sessionKey);
+        STAIR_STAGE_BLOCKS.remove(sessionKey); STAIR_COLLAPSE_NEXT.remove(sessionKey);
+        STAIR_COLLAPSE_QUEUE.remove(sessionKey); STAIR_ROTTEN.remove(sessionKey);
+        STAIR_HATCH.remove(sessionKey); STAIR_CEILING_Y.remove(sessionKey);
+        STAIR_WALL_TOP_Y.remove(sessionKey); STAIR_WAKE_TICK.remove(sessionKey);
+        STAIR_FINAL_ANNOUNCED.remove(sessionKey); STAIR_LAST_SAFE.remove(sessionKey);
+        STAIR_ROTTEN_STAND.remove(sessionKey); STAIR_LAST_FLIGHT_STAGE.remove(sessionKey);
+        STAIR_CRUMBLE_PENDING.remove(sessionKey); STAIR_NEXT_CRUMBLE_TICK.remove(sessionKey);
+        STAIR_BROKEN.remove(sessionKey); STAIR_BROKEN_RESTORE.remove(sessionKey);
+        STAIR_BROKEN_STAGE.remove(sessionKey);
+        FEAST_TABLES.remove(sessionKey); FEAST_DISH_ITEM.remove(sessionKey);
+        FEAST_DISH_TAINTED.remove(sessionKey); FEAST_DISH_DEADLINE.remove(sessionKey);
+        FEAST_DISH_TAKEN.remove(sessionKey); NEXT_DISH_TICK.remove(sessionKey);
+        FEAST_COURSES_DONE.remove(sessionKey); FEAST_TOAST_ITEM.remove(sessionKey);
+        FEAST_GUESTS.remove(sessionKey); FEAST_NEXT_GUEST_SOUND.remove(sessionKey);
+        FEAST_JUDGE_FOCUS_POS.remove(sessionKey); FEAST_JUDGE_FOCUS_UNTIL.remove(sessionKey);
+        MW_START_TICK.remove(sessionKey); MW_DOUBLE.remove(sessionKey);
+        MW_MIRROR_BLOCKS.remove(sessionKey); MW_MIRROR_POS.remove(sessionKey);
+        MW_NEXT_JUMP.remove(sessionKey); MW_TOUCHES.remove(sessionKey);
+        MW_DOUBLE_COOLDOWN.remove(sessionKey);
+        VOE_START_TICK.remove(sessionKey); VOE_DISPELLED.remove(sessionKey);
+        VOE_TOUCH_COOLDOWN.clear(); VOE_STARE_TICKS.clear();
+        MIRROR_ROOM_GLASS.remove(sessionKey); MIRROR_GLASS_BREAK_TIME.remove(sessionKey);
+        MIRROR_ROOM_CORNER.remove(sessionKey); PENDING_MIRROR_INIT.remove(sessionKey);
+        DROWNING_CITY_WATER_LEVEL.remove(sessionKey); DROWNING_CITY_FILL_QUEUE.remove(sessionKey);
+        COLLAPSING_MINE_MAZES.remove(sessionKey); COLLAPSING_MINE_ORIGINS.remove(sessionKey);
+        MINE_OPENED_PASSAGES.remove(sessionKey); NEXT_MINE_SHIFT_TICK.remove(sessionKey);
+    }
 
     /**
      * ДОБАВЛЕНО (сон "Лестница в никуда"): строит низ подъезда — мятные стены, уходящие
@@ -2664,7 +2754,8 @@ public final class DreamManager {
             if (!VOE_START_TICK.containsKey(sessionKey)) {
                 VOE_START_TICK.put(sessionKey, now);
                 player.sendMessage(net.minecraft.text.Text.literal(
-                        "§5Ты не один в этой тьме. Ищи портал пробуждения — и не отводи взгляд от Наблюдателей."), true);
+                        "§5Ты не один в этой тьме. Смотри Наблюдателям прямо в глаза — твой взгляд жжёт их. "
+                                + "Перехвати " + VOE_DISPEL_NEEDED + " взглядов, чтобы проснуться."), true);
             }
             long elapsed = now - VOE_START_TICK.get(sessionKey);
 
@@ -2729,6 +2820,114 @@ public final class DreamManager {
                             net.minecraft.sound.SoundCategory.HOSTILE, 0.5f, 0.4f);
                 }
             }
+
+            // ДОБАВЛЕНО (финал сна, механика "Перехвати взгляд"): смотришь Наблюдателю
+            // точно в глаза (узкий конус ~8°) 3 секунды подряд — он сгорает. Собери
+            // VOE_DISPEL_NEEDED сгоревших — и сон отпустит тебя ПОБЕДИТЕЛЕМ.
+            java.util.List<com.somnium.mod.entity.nightmare.WatcherEntity> watchers = world.getEntitiesByClass(
+                    com.somnium.mod.entity.nightmare.WatcherEntity.class,
+                    new net.minecraft.util.math.Box(player.getBlockPos()).expand(48, 16, 48),
+                    e -> true);
+
+            // 4) Прицельный взгляд: находим Наблюдателя, в которого упирается перекрестие
+            com.somnium.mod.entity.nightmare.WatcherEntity stareTarget = null;
+            var lookVec = player.getRotationVec(1.0f).normalize();
+            for (com.somnium.mod.entity.nightmare.WatcherEntity watcher : watchers) {
+                if (watcher.squaredDistanceTo(player) > 32 * 32) continue;
+                var toWatcher = watcher.getPos().add(0, watcher.getHeight() * 0.7, 0)
+                        .subtract(player.getEyePos()).normalize();
+                if (lookVec.dotProduct(toWatcher) > 0.99) { // узкий конус ~8°
+                    stareTarget = watcher;
+                    break;
+                }
+            }
+
+            if (stareTarget != null) {
+                int stare = VOE_STARE_TICKS.getOrDefault(stareTarget.getUuid(), 0) + 1;
+                VOE_STARE_TICKS.put(stareTarget.getUuid(), stare);
+
+                // Прогресс: частицы нагрева + цифра в экшенбаре
+                if (stare % 10 == 0) {
+                    world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL_FIRE_FLAME,
+                            stareTarget.getX(), stareTarget.getY() + 1.8, stareTarget.getZ(),
+                            4, 0.25, 0.4, 0.25, 0.01);
+                    player.sendMessage(net.minecraft.text.Text.literal(
+                            "§5Взгляд перехватывается... " + Math.min(100, stare * 100 / VOE_STARE_TO_DISPEL) + "%"), true);
+                }
+
+                if (stare >= VOE_STARE_TO_DISPEL) {
+                    // СГОРЕЛ: вспышка света и крик — тьма теряет одного из своих
+                    VOE_STARE_TICKS.remove(stareTarget.getUuid());
+                    world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                            stareTarget.getX(), stareTarget.getY() + 1.3, stareTarget.getZ(),
+                            60, 0.5, 1.0, 0.5, 0.15);
+                    world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL,
+                            stareTarget.getX(), stareTarget.getY() + 1.3, stareTarget.getZ(),
+                            20, 0.4, 0.8, 0.4, 0.05);
+                    world.playSound(null, stareTarget.getX(), stareTarget.getY(), stareTarget.getZ(),
+                            net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_SCREAM,
+                            net.minecraft.sound.SoundCategory.HOSTILE, 1.5f, 1.6f);
+                    world.playSound(null, stareTarget.getX(), stareTarget.getY(), stareTarget.getZ(),
+                            net.minecraft.sound.SoundEvents.ENTITY_GENERIC_EXTINGUISH_FIRE,
+                            net.minecraft.sound.SoundCategory.HOSTILE, 1.0f, 0.8f);
+                    stareTarget.discard();
+
+                    int dispelled = VOE_DISPELLED.getOrDefault(sessionKey, 0) + 1;
+                    VOE_DISPELLED.put(sessionKey, dispelled);
+                    if (dispelled >= VOE_DISPEL_NEEDED) {
+                        wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
+                        continue;
+                    }
+                    player.sendMessage(net.minecraft.text.Text.literal(
+                            "§5Наблюдатель сгорел! Осталось: " + (VOE_DISPEL_NEEDED - dispelled)), true);
+                }
+            } else if (now % 20 == 0) {
+                // Взгляд потерян — недогоревшие Наблюдатели "остывают"
+                for (UUID wId : new ArrayList<>(VOE_STARE_TICKS.keySet())) {
+                    int left = VOE_STARE_TICKS.get(wId) - 4;
+                    if (left <= 0) VOE_STARE_TICKS.remove(wId);
+                    else VOE_STARE_TICKS.put(wId, left);
+                }
+            }
+
+            // 5) Подкрепление: в пустоте всегда есть на кого смотреть — держим 3 Наблюдателей
+            if (elapsed > 400 && watchers.size() < 3 && now % 120 == 0) {
+                double angle = RANDOM.nextDouble() * Math.PI * 2;
+                double dist = 14.0 + RANDOM.nextDouble() * 10.0;
+                var fresh = com.somnium.mod.registry.ModEntities.WATCHER.create(world);
+                if (fresh != null) {
+                    fresh.refreshPositionAndAngles(
+                            player.getX() + Math.cos(angle) * dist, player.getY(),
+                            player.getZ() + Math.sin(angle) * dist,
+                            (float) (Math.atan2(-Math.sin(angle), -Math.cos(angle)) * 180.0 / Math.PI) - 90.0f, 0.0f);
+                    fresh.setPersistent();
+                    world.spawnEntity(fresh);
+                    world.playSound(null, fresh.getX(), fresh.getY(), fresh.getZ(),
+                            net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
+                            net.minecraft.sound.SoundCategory.HOSTILE, 0.7f, 0.4f);
+                }
+            }
+
+            // 6) Касание пустоты: подпустил Наблюдателя вплотную — он жжёт и отшатывается
+            for (com.somnium.mod.entity.nightmare.WatcherEntity watcher : watchers) {
+                long cd = VOE_TOUCH_COOLDOWN.getOrDefault(watcher.getUuid(), 0L);
+                if (now < cd) continue;
+                if (watcher.squaredDistanceTo(player) < 2.2 * 2.2) {
+                    player.damage(world.getDamageSources().mobAttack(watcher), 5.0f);
+                    SanityManager.get(player).addSanity(-6.0f);
+                    net.minecraft.util.math.Vec3d away = player.getPos().subtract(watcher.getPos()).normalize();
+                    player.addVelocity(away.x * 0.9, 0.35, away.z * 0.9);
+                    player.velocityModified = true;
+                    world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                            net.minecraft.sound.SoundEvents.ENTITY_WARDEN_SONIC_BOOM,
+                            net.minecraft.sound.SoundCategory.HOSTILE, 0.5f, 1.8f);
+                    // Отшатнулся — иначе стоял бы внутри игрока и не давал его "поймать взглядом"
+                    double angle = RANDOM.nextDouble() * Math.PI * 2;
+                    watcher.setPosition(player.getX() + Math.cos(angle) * 14.0,
+                            player.getY(), player.getZ() + Math.sin(angle) * 14.0);
+                    VOE_TOUCH_COOLDOWN.put(watcher.getUuid(), now + 100);
+                }
+            }
         }
     }
 
@@ -2775,6 +2974,8 @@ public final class DreamManager {
                         "§7Ты выныриваешь из сна обратно в реальность..."), true);
                 overworld.playSound(null, back, net.minecraft.sound.SoundEvents.BLOCK_PORTAL_TRAVEL,
                         net.minecraft.sound.SoundCategory.PLAYERS, 0.6f, 1.2f);
+                // ДОБАВЛЕНО ("нет эффектов при заходе в портал"): затемнение + частицы + медленное падение
+                applyPortalTravelEffects(player, overworld, back.getX() + 0.5, back.getY() + 1, back.getZ() + 0.5, true);
             } else {
                 // В мир снов — запоминаем, откуда пришёл
                 DREAM_PORTAL_RETURN.put(player.getUuid(), player.getBlockPos());
@@ -2788,8 +2989,31 @@ public final class DreamManager {
                 dreamWorld.playSound(null, arrival[0], arrival[1], arrival[2],
                         net.minecraft.sound.SoundEvents.BLOCK_PORTAL_TRAVEL,
                         net.minecraft.sound.SoundCategory.PLAYERS, 0.6f, 0.8f);
+                applyPortalTravelEffects(player, dreamWorld, arrival[0], arrival[1] + 1, arrival[2], false);
             }
         }
+    }
+
+    /**
+     * ДОБАВЛЕНО ("нет эффектов при заходе в портал"): ощущение нырка сквозь сон —
+     * перед глазами темнеет, мир кружится, вокруг взвиваются сонные частицы.
+     */
+    private static void applyPortalTravelEffects(ServerPlayerEntity player, ServerWorld world,
+                                                 double x, double y, double z, boolean wakingUp) {
+        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                net.minecraft.entity.effect.StatusEffects.BLINDNESS, 50, 0, false, false));
+        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                net.minecraft.entity.effect.StatusEffects.NAUSEA, 220, 0, false, false));
+        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                net.minecraft.entity.effect.StatusEffects.SLOW_FALLING, 60, 0, false, false));
+        world.spawnParticles(net.minecraft.particle.ParticleTypes.REVERSE_PORTAL,
+                x, y, z, 80, 0.6, 1.0, 0.6, 0.2);
+        world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                x, y, z, 20, 0.5, 0.9, 0.5, 0.06);
+        world.playSound(null, x, y, z,
+                wakingUp ? net.minecraft.sound.SoundEvents.ENTITY_PLAYER_LEVELUP
+                        : net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
+                net.minecraft.sound.SoundCategory.PLAYERS, 0.5f, wakingUp ? 1.4f : 0.6f);
     }
 
     /** Полная очистка per-session данных сна "Пустошь зеркал" */

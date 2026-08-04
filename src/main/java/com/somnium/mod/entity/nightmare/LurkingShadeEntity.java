@@ -61,7 +61,17 @@ public class LurkingShadeEntity extends AbstractNightmareEntity {
                         spe.getUuid(), serverWorld.getServer().getTicks())) {
             return false;
         }
-        return super.tryAttack(target);
+        boolean hit = super.tryAttack(target);
+        // ДОБАВЛЕНО (способность "Прикосновение тьмы"): удар тени накрывает жертву
+        // кромешным мраком на 5 секунд — в лесу теней это почти смертный приговор.
+        if (hit && target instanceof net.minecraft.server.network.ServerPlayerEntity spe2) {
+            spe2.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                    net.minecraft.entity.effect.StatusEffects.DARKNESS, 100, 0));
+            this.getEntityWorld().playSound(null, this.getBlockPos(),
+                    net.minecraft.sound.SoundEvents.ENTITY_WARDEN_SONIC_BOOM,
+                    this.getSoundCategory(), 0.4f, 1.6f);
+        }
+        return hit;
     }
 
     private boolean isBeingWatchedBy(PlayerEntity player) {

@@ -16,12 +16,17 @@ public class NightmarePlaceholderRenderer<T extends AbstractNightmareEntity> ext
     private static final Identifier TEX_ZOMBIE          = new Identifier("minecraft", "textures/entity/zombie/zombie.png");
     private static final Identifier TEX_DROWNED         = new Identifier("minecraft", "textures/entity/zombie/drowned.png");
     private static final Identifier TEX_HUSK            = new Identifier("minecraft", "textures/entity/zombie/husk.png");
-    private static final Identifier TEX_ZOMBIE_VILLAGER = new Identifier("minecraft", "textures/entity/zombie_villager/zombie_villager.png");
     private static final Identifier TEX_SKELETON        = new Identifier("minecraft", "textures/entity/skeleton/skeleton.png");
     private static final Identifier TEX_STRAY           = new Identifier("minecraft", "textures/entity/skeleton/stray.png");
     private static final Identifier TEX_WITHER_SKELETON = new Identifier("minecraft", "textures/entity/skeleton/wither_skeleton.png");
     private static final Identifier TEX_PIGLIN          = new Identifier("minecraft", "textures/entity/piglin/piglin.png");
-    private static final Identifier TEX_VILLAGER        = new Identifier("minecraft", "textures/entity/villager/villager.png");
+
+    // ДОБАВЛЕНО ("убери поломанных жителей + нарисуй красивых сущностей"): кастомные
+    // текстуры 64x64 в формате зомби-модели — вместо текстуры жителя, которая криво
+    // натягивалась на бипеда и выглядела месивом из частей тел.
+    private static Identifier somniumTex(String name) {
+        return new Identifier("somnium", "textures/entity/" + name + ".png");
+    }
 
     public NightmarePlaceholderRenderer(EntityRendererFactory.Context context) {
         super(context, new BipedEntityModel<>(context.getPart(EntityModelLayers.ZOMBIE)), 0.5f);
@@ -35,15 +40,15 @@ public class NightmarePlaceholderRenderer<T extends AbstractNightmareEntity> ext
         // Лес теней
         if (entity instanceof LurkingShadeEntity) return TEX_WITHER_SKELETON;
         // Пустошь зеркал
-        if (entity instanceof MirroredDoubleEntity) return TEX_VILLAGER;
+        if (entity instanceof MirroredDoubleEntity) return somniumTex("mirrored_double");
         // Шахта
-        if (entity instanceof ScreamingMinerEntity) return TEX_HUSK;
+        if (entity instanceof ScreamingMinerEntity) return somniumTex("screaming_miner");
         if (entity instanceof BlindBurrowerEntity) return TEX_SKELETON;
         // Кровавый пир
-        if (entity instanceof FeralVillagerEntity) return TEX_ZOMBIE_VILLAGER;
-        if (entity instanceof FleshGolemEntity) return TEX_PIGLIN;
+        if (entity instanceof FeralVillagerEntity) return somniumTex("feral_villager");
+        if (entity instanceof FleshGolemEntity) return somniumTex("flesh_golem");
         // Пустота с глазами
-        if (entity instanceof WatcherEntity) return TEX_VILLAGER;
+        if (entity instanceof WatcherEntity) return somniumTex("watcher");
         // Сон-в-сне (босс)
         if (entity instanceof NightmareAmalgamEntity) return TEX_WITHER_SKELETON;
         return TEX_ZOMBIE;

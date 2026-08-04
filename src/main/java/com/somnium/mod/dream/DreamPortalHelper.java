@@ -173,6 +173,113 @@ public final class DreamPortalHelper {
                                 .with(DreamPortalBlock.AXIS, Direction.Axis.X));
             }
         }
+
+        // ДОБАВЛЕНО ("мир слишком пустой"): сонный сад вокруг платформы — искажённые
+        // деревья со светящимися сердцевинами, аметистовые шпили, фонари и заросли корней.
+        generateDreamGarden(dreamWorld);
+    }
+
+    // =====================================================================
+    // ДОБАВЛЕНО ("мир слишком пустой, нужны структуры и деревья"):
+    // процедурный "сонный сад" — детерминированный (seed фиксирован), строится один раз
+    // вместе с платформой. Всё в радиусе 10–48 блоков от центра, на поверхности (y=5).
+    // =====================================================================
+
+    /** Верхушка земли в мире снов (слои: 1 бедрок + 3 чернокамня + 1 искажённый нилиум). */
+    private static final int GROUND_TOP = 4; // блок земли; ставим декор начиная с y=5
+
+    private static void generateDreamGarden(ServerWorld world) {
+        java.util.Random rnd = new java.util.Random(20260805L);
+
+        // 1) Искажённые "деревья снов": ноготковый ствол + купол из искажённого нароста
+        //    со светящимся грибом-сердцевиной. 18 штук в кольце 10..46 блоков.
+        for (int t = 0; t < 18; t++) {
+            double angle = rnd.nextDouble() * Math.PI * 2;
+            double dist = 10.0 + rnd.nextDouble() * 36.0;
+            int cx = (int) Math.round(Math.cos(angle) * dist);
+            int cz = (int) Math.round(Math.sin(angle) * dist);
+            if (!isGround(world, cx, cz)) continue;
+            buildDreamTree(world, cx, cz, rnd);
+        }
+
+        // 2) Аметистовые шпили — скопления кристаллов высотой 2..5
+        for (int s = 0; s < 12; s++) {
+            double angle = rnd.nextDouble() * Math.PI * 2;
+            double dist = 8.0 + rnd.nextDouble() * 34.0;
+            int cx = (int) Math.round(Math.cos(angle) * dist);
+            int cz = (int) Math.round(Math.sin(angle) * dist);
+            if (!isGround(world, cx, cz)) continue;
+            int h = 2 + rnd.nextInt(4);
+            for (int y = 1; y <= h; y++) {
+                world.setBlockState(new BlockPos(cx, GROUND_TOP + y, cz),
+                        Blocks.AMETHYST_BLOCK.getDefaultState(), 2);
+            }
+            world.setBlockState(new BlockPos(cx, GROUND_TOP + h + 1, cz),
+                    Blocks.LARGE_AMETHYST_BUD.getDefaultState(), 2);
+        }
+
+        // 3) Фонари снов: столбик из чернокамня + end rod, светят над тропой к платформе
+        for (int l = 0; l < 10; l++) {
+            double angle = rnd.nextDouble() * Math.PI * 2;
+            double dist = 7.0 + rnd.nextDouble() * 30.0;
+            int cx = (int) Math.round(Math.cos(angle) * dist);
+            int cz = (int) Math.round(Math.sin(angle) * dist);
+            if (!isGround(world, cx, cz)) continue;
+            world.setBlockState(new BlockPos(cx, GROUND_TOP + 1, cz), Blocks.BLACKSTONE_WALL.getDefaultState(), 2);
+            world.setBlockState(new BlockPos(cx, GROUND_TOP + 2, cz), Blocks.END_ROD.getDefaultState(), 2);
+        }
+
+        // 4) Заросли искажённых корней и незерских ростков — пятнами по 3..7 штук
+        for (int patch = 0; patch < 26; patch++) {
+            double angle = rnd.nextDouble() * Math.PI * 2;
+            double dist = 6.0 + rnd.nextDouble() * 40.0;
+            int px = (int) Math.round(Math.cos(angle) * dist);
+            int pz = (int) Math.round(Math.sin(angle) * dist);
+            int count = 3 + rnd.nextInt(5);
+            for (int i = 0; i < count; i++) {
+                int x = px + rnd.nextInt(5) - 2;
+                int z = pz + rnd.nextInt(5) - 2;
+                if (!isGround(world, x, z)) continue;
+                if (!world.getBlockState(new BlockPos(x, GROUND_TOP + 1, z)).isAir()) continue;
+                var plant = rnd.nextBoolean()
+                        ? Blocks.WARPED_ROOTS.getDefaultState()
+                        : Blocks.NETHER_SPROUTS.getDefaultState();
+                world.setBlockState(new BlockPos(x, GROUND_TOP + 1, z), plant, 2);
+            }
+        }
+    }
+
+    /** Под платформой и порталом ничего не сажаем: там уже блоки сноведений. */
+    private static boolean isGround(ServerWorld world, int x, int z) {
+        return world.getBlockState(new BlockPos(x, GROUND_TOP, z)).getBlock() == Blocks.WARPED_NYLIUM
+                && world.getBlockState(new BlockPos(x, GROUND_TOP + 1, z)).isAir();
+    }
+
+    /** Одно дерево снов: ствол 4..7, купол из искажённого нароста, гриб-светильник внутри. */
+    private static void buildDreamTree(ServerWorld world, int cx, int cz, java.util.Random rnd) {
+        int trunkH = 4 + rnd.nextInt(4);
+        for (int y = 1; y <= trunkH; y++) {
+            world.setBlockState(new BlockPos(cx, GROUND_TOP + y, cz),
+                    Blocks.WARPED_STEM.getDefaultState(), 2);
+        }
+        // Купол: сфера радиуса 2..3 вокруг вершины ствола (без нижнего яруса — не душит ствол)
+        int topY = GROUND_TOP + trunkH;
+        int radius = 2 + rnd.nextInt(2);
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = 0; dy <= radius; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    double d = dx * dx + dy * dy + dz * dz;
+                    if (d > radius * radius + 0.5) continue;
+                    if (rnd.nextDouble() < 0.18) continue; // рваные края — "сонное" рыхление
+                    BlockPos pos = new BlockPos(cx + dx, topY + dy, cz + dz);
+                    if (!world.getBlockState(pos).isAir()
+                            && world.getBlockState(pos).getBlock() != Blocks.WARPED_STEM) continue;
+                    world.setBlockState(pos, Blocks.WARPED_WART_BLOCK.getDefaultState(), 2);
+                }
+            }
+        }
+        // Сердцевина-светильник внутри купола
+        world.setBlockState(new BlockPos(cx, topY, cz), Blocks.SHROOMLIGHT.getDefaultState(), 2);
     }
 
     /** Куда телепортировать прибывшего в мир снов: перед порталом, на платформе. */

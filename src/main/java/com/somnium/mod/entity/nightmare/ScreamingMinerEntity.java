@@ -4,6 +4,7 @@ import net.minecraft.entity.EntityType;
 import net.minecraft.entity.attribute.DefaultAttributeContainer;
 import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.entity.mob.HostileEntity;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.world.World;
 
 /**
@@ -35,7 +36,34 @@ public class ScreamingMinerEntity extends AbstractNightmareEntity {
             this.getEntityWorld().playSound(null, this.getBlockPos(),
                     com.somnium.mod.registry.ModSounds.MINER_SCREAM, this.getSoundCategory(), 2.5f, 1.0f);
             screamCooldown = 100; // раз в 5 секунд
-            // TODO: оповестить всех ScreamingMinerEntity/BlindBurrowerEntity в радиусе о позиции цели
+
+            // РЕАЛИЗОВАНО ("эхо шахты"): крик слышат все Blind Burrower'ы поблизости —
+            // они тут же узнают, где жертва, и бросаются к ней.
+            if (this.getEntityWorld() instanceof net.minecraft.server.world.ServerWorld sw
+                    && this.getTarget() instanceof PlayerEntity prey) {
+                for (BlindBurrowerEntity burrower : sw.getEntitiesByClass(
+                        BlindBurrowerEntity.class, this.getBoundingBox().expand(24.0), e -> true)) {
+                    burrower.setTarget(prey);
+                }
+
+                // РЕАЛИЗОВАНО ("обвал"): от крика с потолка над жертвой сыплется гравий —
+                // в шахте кричать опасно. Роняем 3-5 блоков с небольшим разбросом.
+                int clumps = 3 + this.getRandom().nextInt(3);
+                for (int i = 0; i < clumps; i++) {
+                    int dx = this.getRandom().nextInt(5) - 2;
+                    int dz = this.getRandom().nextInt(5) - 2;
+                    // Самая верхняя воздушная полость над жертвой — гравий упадёт сам
+                    for (int dy = 8; dy >= 3; dy--) {
+                        net.minecraft.util.math.BlockPos pos = prey.getBlockPos().add(dx, dy, dz);
+                        if (sw.getBlockState(pos).isAir()) {
+                            sw.setBlockState(pos, net.minecraft.block.Blocks.GRAVEL.getDefaultState());
+                            break;
+                        }
+                    }
+                }
+                sw.spawnParticles(net.minecraft.particle.ParticleTypes.CLOUD,
+                        prey.getX(), prey.getY() + 2.5, prey.getZ(), 8, 0.6, 0.4, 0.6, 0.02);
+            }
         }
     }
 }

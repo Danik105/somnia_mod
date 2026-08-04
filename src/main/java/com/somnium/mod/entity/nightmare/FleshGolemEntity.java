@@ -27,13 +27,53 @@ public class FleshGolemEntity extends AbstractNightmareEntity {
                 .add(EntityAttributes.GENERIC_KNOCKBACK_RESISTANCE, 1.0);
     }
 
+    // РЕАЛИЗОВАНО ("мясной кувалда"): когда жертва подходит ближе 4,5 блоков,
+    // голем бьёт оземь — все игроки в радиусе 4 блоков получают урон, подлетают
+    // вверх и отлетают прочь. Перезарядка ~8 секунд, за 1,5 секунды до удара —
+    // предупреждающий рык и частицы, чтобы был шанс отбежать.
+    private boolean slamWarned = false;
+
     @Override
     public void tick() {
         super.tick();
+        if (this.getEntityWorld().isClient()) return;
+        if (!(this.getEntityWorld() instanceof net.minecraft.server.world.ServerWorld sw)) return;
+
         if (slamCooldown > 0) {
             slamCooldown--;
+            // Предупреждение за 30 тиков до удара
+            if (slamCooldown == 30 && !slamWarned && this.getTarget() != null) {
+                slamWarned = true;
+                sw.playSound(null, this.getBlockPos(),
+                        net.minecraft.sound.SoundEvents.ENTITY_RAVAGER_ROAR,
+                        this.getSoundCategory(), 1.0f, 0.6f);
+                sw.spawnParticles(net.minecraft.particle.ParticleTypes.CRIT,
+                        this.getX(), this.getY() + 2.5, this.getZ(), 12, 0.7, 0.5, 0.7, 0.1);
+            }
         }
-        // TODO: атака по площади (AoE slam) с анимацией и отбрасыванием игроков в радиусе 4 блока,
-        // перезарядка ~8 секунд (slamCooldown = 160)
+
+        if (slamCooldown <= 0 && this.getTarget() != null
+                && this.squaredDistanceTo(this.getTarget()) < 4.5 * 4.5) {
+            slamWarned = false;
+            slamCooldown = 160;
+
+            for (net.minecraft.entity.player.PlayerEntity player : sw.getEntitiesByClass(
+                    net.minecraft.entity.player.PlayerEntity.class,
+                    this.getBoundingBox().expand(4.0), p -> !p.isCreative() && !p.isSpectator())) {
+                player.damage(sw.getDamageSources().mobAttack(this), 6.0f);
+                net.minecraft.util.math.Vec3d away = player.getPos().subtract(this.getPos()).normalize();
+                player.addVelocity(away.x * 1.2, 0.6, away.z * 1.2);
+                player.velocityModified = true;
+            }
+            sw.playSound(null, this.getBlockPos(),
+                    net.minecraft.sound.SoundEvents.ENTITY_GENERIC_EXPLODE,
+                    this.getSoundCategory(), 1.2f, 0.5f);
+            sw.spawnParticles(net.minecraft.particle.ParticleTypes.EXPLOSION,
+                    this.getX(), this.getY() + 0.5, this.getZ(), 3, 1.2, 0.3, 1.2, 0.0);
+            sw.spawnParticles(new net.minecraft.particle.BlockStateParticleEffect(
+                            net.minecraft.particle.ParticleTypes.BLOCK,
+                            net.minecraft.block.Blocks.NETHERRACK.getDefaultState()),
+                    this.getX(), this.getY() + 0.2, this.getZ(), 40, 1.5, 0.2, 1.5, 0.1);
+        }
     }
 }
