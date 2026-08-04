@@ -111,6 +111,10 @@ public final class SomniumMod implements ModInitializer {
         // 17. ДОБАВЛЕНО (сон "Кровавый пир"): подача блюд, порча блюд, голодание/насыщение
         ServerTickEvents.END_SERVER_TICK.register(com.somnium.mod.dream.DreamManager::tickCrimsonFeast);
 
+        // 17.1 ДОБАВЛЕНО (сон "Пустошь зеркал", редизайн "Поймай своё отражение"):
+        // убегающее зеркало (3 касания до выхода) и Двойник, идущий по следу игрока
+        ServerTickEvents.END_SERVER_TICK.register(com.somnium.mod.dream.DreamManager::tickMirrorWastes);
+
         // 18. ДОБАВЛЕНО (команда для тестирования): /testdream для быстрой телепортации в измерения снов
         CommandRegistrationCallback.EVENT.register(TestDreamCommand::register);
         // 19. ДОБАВЛЕНО ("добавь команды, чтобы влиять на шкалу рассудка"): /sanity get|set|add

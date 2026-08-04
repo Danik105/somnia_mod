@@ -1,9 +1,9 @@
 {
   "display_name_key": "somnium.dream.mirror_wastes",
   "structure_template": "somnium:mirror_wastes_procedural",
-  "monster_entity_ids": ["somnium:mirrored_double"],
+  "monster_entity_ids": [],
   "base_weight": 18,
   "min_sanity_to_appear": 100,
   "duration_ticks": 6600,
-  "objective": "Уничтожить своего Двойника, не разбив ни одного зеркала-осколка."
+  "objective": "Поймай своё отражение. Через полминуты в пустоши появится зеркало — коснись его 3 раза, а оно будет исчезать и блестеть в новых местах. Двойник идёт за тобой по пятам и ускоряется после каждого касания — не дай ему схватить тебя."
 }

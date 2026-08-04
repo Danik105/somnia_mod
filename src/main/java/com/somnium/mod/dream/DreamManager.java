@@ -1284,6 +1284,11 @@ public final class DreamManager {
         removeFeastItems(player);
         FEAST_LIGHTER_GIVEN.remove(player.getUuid());
 
+        // ДОБАВЛЕНО (сон "Пустошь зеркал", редизайн): зеркало, Двойник, касания
+        if (player.getEntityWorld() instanceof ServerWorld mwWorld) {
+            clearMirrorWastesData(mwWorld, dreamStateKey);
+        }
+
         // ДОБАВЛЕНО (сон "Сон-в-сне"): очищаем данные о погоде при пробуждении
         DREAM_WITHIN_DREAM_ORIGINAL_POS.remove(player.getUuid());
         DREAM_WITHIN_DREAM_CHUNKS.remove(player.getUuid());
@@ -1758,6 +1763,30 @@ public final class DreamManager {
     private static final float STAIR_FALL_SANITY = -4.0f;
     private static final float STAIR_ROTTEN_SANITY = -2.0f;
 
+    // ===== ДОБАВЛЕНО (сон "Пустошь зеркал", редизайн "Поймай своё отражение") =====
+    /** Тик входа в сон (ленивая инициализация в tickMirrorWastes) */
+    private static final Map<UUID, Long> MW_START_TICK = new HashMap<>();
+    /** UUID сущности Двойника, идущего по следу игрока */
+    private static final Map<UUID, UUID> MW_DOUBLE = new HashMap<>();
+    /** Координаты блоков текущего зеркала (для снятия при прыжке/пробуждении) */
+    private static final Map<UUID, List<BlockPos>> MW_MIRROR_BLOCKS = new HashMap<>();
+    /** Центр текущего зеркала (нижний блок рамы) */
+    private static final Map<UUID, BlockPos> MW_MIRROR_POS = new HashMap<>();
+    /** Тик следующего самопроизвольного прыжка зеркала */
+    private static final Map<UUID, Long> MW_NEXT_JUMP = new HashMap<>();
+    /** Сколько раз игрок коснулся зеркала (нужно 3) */
+    private static final Map<UUID, Integer> MW_TOUCHES = new HashMap<>();
+    /** До этого тика Двойник не может схватить снова (после захвата отбрасывается) */
+    private static final Map<UUID, Long> MW_DOUBLE_COOLDOWN = new HashMap<>();
+    /** Зеркало появляется через 25 секунд после входа в сон */
+    private static final int MW_MIRROR_DELAY = 500;
+    /** Зеркало стоит на месте 10 секунд, потом прыгает в новую точку */
+    private static final int MW_MIRROR_STAND_TICKS = 200;
+    /** Сколько касаний нужно для выхода из сна */
+    private static final int MW_TOUCHES_NEEDED = 3;
+    /** Рассудок за захват Двойником */
+    private static final float MW_GRAB_SANITY = -12.0f;
+
     /**
      * ДОБАВЛЕНО (сон "Лестница в никуда"): строит низ подъезда — мятные стены, уходящие
      * вниз в пустоту, временный потолок и сразу весь первый этаж (площадка под спавном,
@@ -1867,8 +1896,11 @@ public final class DreamManager {
             int startZ = first ? -2 : -9;
             int stepX1 = first ? -2 : 1;
             int stepX2 = first ? -1 : 2;
-            net.minecraft.util.math.Direction downhill = first
-                    ? net.minecraft.util.math.Direction.SOUTH : net.minecraft.util.math.Direction.NORTH;
+            // ИСПРАВЛЕНО ("хочу чтобы лестница была ступеньками"): FACING у ступени — это
+            // направление ПОДЪЁМА (полная грань смотрит вверх по маршу). Раньше стояло
+            // направление спуска — каждый второй блок требовал прыжка, марш шёл пилой.
+            net.minecraft.util.math.Direction uphill = first
+                    ? net.minecraft.util.math.Direction.NORTH : net.minecraft.util.math.Direction.SOUTH;
             for (int i = 0; i < 8; i++) {
                 int z = first ? startZ - i : startZ + i;
                 int y = marchBaseY + 1 + i / 2;
@@ -1881,7 +1913,7 @@ public final class DreamManager {
                 for (int x : new int[] {stepX1, stepX2}) {
                     BlockPos pos = new BlockPos(center.getX() + x, y, center.getZ() + z);
                     world.setBlockState(pos, stepBlock.getDefaultState()
-                            .with(net.minecraft.block.StairsBlock.FACING, downhill)
+                            .with(net.minecraft.block.StairsBlock.FACING, uphill)
                             .with(net.minecraft.block.StairsBlock.HALF, half));
                     blocks.add(pos);
                     if (rotten) {
@@ -2179,6 +2211,266 @@ public final class DreamManager {
         STAIR_FINAL_ANNOUNCED.remove(sessionKey);
     }
 
+    // =====================================================================
+    // ДОБАВЛЕНО (сон "Пустошь зеркал", редизайн "Поймай своё отражение")
+    // Вместо боя с боссом: через ~25 сек в пустоши появляется зеркало — нужно
+    // коснуться его 3 раза, а оно каждые 10 сек (и после каждого касания)
+    // исчезает и блестит в новом месте. По следу игрока идёт Двойник: он не
+    // атакует, но после каждого касания ускоряется; если догонит — забирает
+    // рассудок. 3 касания — зеркало разбивается, игрок просыпается победителем.
+    // =====================================================================
+
+    /**
+     * Тик сна "Пустошь зеркал". Управляет появлением/прыжками зеркала, касаниями,
+     * преследующим Двойником и защитным свипером от случайных ванильных мобов.
+     */
+    public static void tickMirrorWastes(MinecraftServer server) {
+        if (ACTIVE.isEmpty()) return;
+        long now = server.getTicks();
+
+        for (UUID playerId : new ArrayList<>(ACTIVE.keySet())) {
+            ActiveDream active = ACTIVE.get(playerId);
+            if (active == null || !active.dreamId().equals(SomniumMod.id("mirror_wastes"))) {
+                continue; // не наш сон
+            }
+            ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
+            if (player == null || !(player.getEntityWorld() instanceof ServerWorld world)) continue;
+
+            UUID sessionKey = sessionKey(playerId);
+
+            // 0) Ленивая инициализация: стартовый тик + Двойник по следу
+            if (!MW_START_TICK.containsKey(sessionKey)) {
+                MW_START_TICK.put(sessionKey, now);
+                MW_TOUCHES.put(sessionKey, 0);
+                MW_DOUBLE_COOLDOWN.put(sessionKey, 0L);
+                spawnMirrorDouble(world, player, sessionKey);
+                player.sendMessage(net.minecraft.text.Text.literal(
+                        "§7Пустошь молчит. Что-то идёт за тобой следом — не оглядывайся надолго."), true);
+            }
+
+            // 0.1) Защитный свипер: в пустоши не должно быть случайных монстров,
+            //      кроме нашего Двойника (спавн-правила измерения игра игнорирует)
+            if (now % 10 == 0) {
+                UUID doubleUuid = MW_DOUBLE.get(sessionKey);
+                for (net.minecraft.entity.mob.MobEntity mob : world.getEntitiesByClass(
+                        net.minecraft.entity.mob.MobEntity.class,
+                        new net.minecraft.util.math.Box(player.getBlockPos()).expand(64, 16, 64),
+                        e -> e instanceof net.minecraft.entity.mob.Monster
+                                && !e.getUuid().equals(doubleUuid))) {
+                    mob.discard();
+                }
+            }
+
+            // 1) Появление зеркала через MW_MIRROR_DELAY тиков после входа
+            long startTick = MW_START_TICK.get(sessionKey);
+            if (!MW_MIRROR_POS.containsKey(sessionKey) && now >= startTick + MW_MIRROR_DELAY) {
+                placeMirror(world, player, sessionKey);
+                player.sendMessage(net.minecraft.text.Text.literal(
+                        "§5Где-то в пустоши блеснуло зеркало. Коснись его — три раза, и сон отпустит."), true);
+                world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                        net.minecraft.sound.SoundEvents.BLOCK_AMETHYST_BLOCK_CHIME,
+                        net.minecraft.sound.SoundCategory.AMBIENT, 1.0f, 0.6f);
+            }
+
+            BlockPos mirrorPos = MW_MIRROR_POS.get(sessionKey);
+            if (mirrorPos != null) {
+                // 1.1) Блеск-маяк, чтобы зеркало было видно издалека
+                if (now % 5 == 0) {
+                    world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                            mirrorPos.getX() + 0.5, mirrorPos.getY() + 1.5, mirrorPos.getZ() + 0.5,
+                            2, 0.1, 1.6, 0.1, 0.01);
+                }
+
+                // 1.2) Подсказка-направление каждые 12 секунд, пока зеркало стоит
+                if (now % 240 == 0) {
+                    double dx = mirrorPos.getX() - player.getX();
+                    double dz = mirrorPos.getZ() - player.getZ();
+                    String dir = Math.abs(dx) > Math.abs(dz)
+                            ? (dx > 0 ? "востоке" : "западе")
+                            : (dz > 0 ? "юге" : "севере");
+                    player.sendMessage(net.minecraft.text.Text.literal(
+                            "§7Блеск зеркала — где-то на " + dir + "."), true);
+                }
+
+                // 1.3) Касание: игрок подошёл вплотную к раме
+                double touchDx = player.getX() - (mirrorPos.getX() + 0.5);
+                double touchDz = player.getZ() - (mirrorPos.getZ() + 0.5);
+                double touchDist = Math.sqrt(touchDx * touchDx + touchDz * touchDz);
+                if (touchDist < 2.0 && Math.abs(player.getY() - mirrorPos.getY()) < 4) {
+                    int touches = MW_TOUCHES.getOrDefault(sessionKey, 0) + 1;
+                    MW_TOUCHES.put(sessionKey, touches);
+                    world.playSound(null, mirrorPos, net.minecraft.sound.SoundEvents.BLOCK_GLASS_HIT,
+                            net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.7f);
+                    if (touches >= MW_TOUCHES_NEEDED) {
+                        // Финал: зеркало разбивается — сон отпускает
+                        removeMirrorBlocks(world, sessionKey);
+                        MW_MIRROR_POS.remove(sessionKey);
+                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                                net.minecraft.sound.SoundEvents.BLOCK_GLASS_BREAK,
+                                net.minecraft.sound.SoundCategory.AMBIENT, 1.2f, 0.6f);
+                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                                net.minecraft.sound.SoundEvents.ENTITY_PLAYER_LEVELUP,
+                                net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
+                        world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                                player.getX(), player.getY() + 1.0, player.getZ(),
+                                40, 0.5, 1.0, 0.5, 0.05);
+                        player.sendMessage(net.minecraft.text.Text.literal(
+                                "§6Зеркало разбивается — осколки тают в воздухе. Ты просыпаешься."), true);
+                        wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
+                        continue;
+                    } else {
+                        // Касание засчитано — зеркало в панике прыгает, Двойник ускоряется
+                        player.sendMessage(net.minecraft.text.Text.literal(
+                                "§5Касание " + touches + "/" + MW_TOUCHES_NEEDED
+                                        + ". Зеркало ускользает... а шаги за спиной учащаются."), true);
+                        placeMirror(world, player, sessionKey);
+                    }
+                } else if (now >= MW_NEXT_JUMP.getOrDefault(sessionKey, now)) {
+                    // 1.4) Самопроизвольный прыжок: зеркало не даётся в руки
+                    placeMirror(world, player, sessionKey);
+                    world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                            net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
+                            net.minecraft.sound.SoundCategory.AMBIENT, 0.9f, 0.5f);
+                    if (now % 2 == 0) {
+                        player.sendMessage(net.minecraft.text.Text.literal(
+                                "§7Зеркало растворяется... и блестит уже в другом месте."), true);
+                    }
+                }
+            }
+
+            // 2) Двойник идёт по следу: после каждого касания — быстрее
+            UUID doubleUuid = MW_DOUBLE.get(sessionKey);
+            if (doubleUuid != null) {
+                var doubleEntity = world.getEntity(doubleUuid);
+                if (doubleEntity instanceof com.somnium.mod.entity.nightmare.MirroredDoubleEntity doubleMob
+                        && doubleEntity.isAlive()) {
+                    double dx = player.getX() - doubleMob.getX();
+                    double dz = player.getZ() - doubleMob.getZ();
+                    double dist = Math.sqrt(dx * dx + dz * dz);
+
+                    long grabCooldownUntil = MW_DOUBLE_COOLDOWN.getOrDefault(sessionKey, 0L);
+                    if (dist > 0.5 && now >= grabCooldownUntil && now % 2 == 0) {
+                        // Шаг ~0.09 б/т на старте, +0.035 за каждое касание зеркала
+                        double speed = 0.18 + 0.07 * MW_TOUCHES.getOrDefault(sessionKey, 0);
+                        double step = Math.min(speed * 2, dist - 0.4);
+                        double nx = doubleMob.getX() + dx / dist * step;
+                        double nz = doubleMob.getZ() + dz / dist * step;
+                        doubleMob.setPosition(nx, doubleMob.getY(), nz);
+                        float yaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
+                        doubleMob.setYaw(yaw);
+                        doubleMob.setBodyYaw(yaw);
+                        doubleMob.setHeadYaw(yaw);
+                    }
+
+                    // Захват: холод пробирает до костей, Двойника отбрасывает
+                    if (dist < 1.8 && now >= grabCooldownUntil) {
+                        MW_DOUBLE_COOLDOWN.put(sessionKey, now + 120);
+                        SanityManager.get(player).addSanity(MW_GRAB_SANITY);
+                        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                                net.minecraft.entity.effect.StatusEffects.NAUSEA, 120, 0));
+                        player.sendMessage(net.minecraft.text.Text.literal(
+                                "§4Двойник касается тебя — тепло уходит из тела!"), true);
+                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
+                                net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_SCREAM,
+                                net.minecraft.sound.SoundCategory.HOSTILE, 0.8f, 0.5f);
+                        // Отброс Двойника на 15 блоков в случайную сторону
+                        double angle = RANDOM.nextDouble() * Math.PI * 2;
+                        double rx = player.getX() + Math.cos(angle) * 15;
+                        double rz = player.getZ() + Math.sin(angle) * 15;
+                        doubleMob.setPosition(rx, doubleMob.getY(), rz);
+                    }
+
+                    // Жуткий шёпот Двойника каждые ~15 секунд
+                    if (now % 300 == 0) {
+                        world.playSound(null, doubleMob.getX(), doubleMob.getY(), doubleMob.getZ(),
+                                net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_AMBIENT,
+                                net.minecraft.sound.SoundCategory.HOSTILE, 0.7f, 0.5f);
+                    }
+                }
+            }
+        }
+    }
+
+    /** Спавнит Двойника-тень в 25 блоках от игрока: без ИИ, неуязвим, движется вручную. */
+    private static void spawnMirrorDouble(ServerWorld world, ServerPlayerEntity player, UUID sessionKey) {
+        var doubleMob = new com.somnium.mod.entity.nightmare.MirroredDoubleEntity(
+                com.somnium.mod.registry.ModEntities.MIRRORED_DOUBLE, world);
+        double angle = RANDOM.nextDouble() * Math.PI * 2;
+        double x = player.getX() + Math.cos(angle) * 25;
+        double z = player.getZ() + Math.sin(angle) * 25;
+        int y = ModDimensions.platformSurfaceY(world.getRegistryKey());
+        doubleMob.setPosition(x, y, z);
+        doubleMob.setAiDisabled(true);    // двигаем вручную в тике — он ТЕНЬ, не боец
+        doubleMob.setInvulnerable(true);  // его нельзя убить — только оторваться
+        doubleMob.setSilent(true);
+        doubleMob.setPersistent();
+        world.spawnEntity(doubleMob);
+        MW_DOUBLE.put(sessionKey, doubleMob.getUuid());
+    }
+
+    /**
+     * Переносит зеркало в новую случайную точку в 18–30 блоках от игрока.
+     * Старые блоки снимаются. Зеркало — рама 3×4 из полированного чернита,
+     * середина 1×2 — стекло: "отражение" мерцает частицами-маяком.
+     */
+    private static void placeMirror(ServerWorld world, ServerPlayerEntity player, UUID sessionKey) {
+        removeMirrorBlocks(world, sessionKey);
+
+        double angle = RANDOM.nextDouble() * Math.PI * 2;
+        double dist = 18.0 + RANDOM.nextDouble() * 12.0;
+        int x = (int) Math.round(player.getX() + Math.cos(angle) * dist);
+        int z = (int) Math.round(player.getZ() + Math.sin(angle) * dist);
+        int y = ModDimensions.platformSurfaceY(world.getRegistryKey());
+        BlockPos base = new BlockPos(x, y, z);
+
+        List<BlockPos> placed = new ArrayList<>();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = 0; dy <= 3; dy++) {
+                boolean frame = dx != 0 || dy == 0 || dy == 3;
+                BlockPos pos = base.add(dx, dy, 0);
+                world.setBlockState(pos, frame
+                        ? net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState()
+                        : net.minecraft.block.Blocks.GLASS.getDefaultState());
+                placed.add(pos);
+            }
+        }
+        MW_MIRROR_BLOCKS.put(sessionKey, placed);
+        MW_MIRROR_POS.put(sessionKey, base);
+        MW_NEXT_JUMP.put(sessionKey, (long) world.getServer().getTicks() + MW_MIRROR_STAND_TICKS);
+
+        // Вспышка появления
+        world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL_FIRE_FLAME,
+                x + 0.5, y + 1.5, z + 0.5, 20, 0.6, 1.0, 0.6, 0.02);
+    }
+
+    /** Снимает блоки зеркала из мира (при прыжке или пробуждении). */
+    private static void removeMirrorBlocks(ServerWorld world, UUID sessionKey) {
+        List<BlockPos> placed = MW_MIRROR_BLOCKS.remove(sessionKey);
+        if (placed == null) return;
+        for (BlockPos pos : placed) {
+            var block = world.getBlockState(pos).getBlock();
+            if (block == net.minecraft.block.Blocks.POLISHED_BLACKSTONE
+                    || block == net.minecraft.block.Blocks.GLASS) {
+                world.setBlockState(pos, net.minecraft.block.Blocks.AIR.getDefaultState());
+            }
+        }
+    }
+
+    /** Полная очистка per-session данных сна "Пустошь зеркал" */
+    private static void clearMirrorWastesData(ServerWorld world, UUID sessionKey) {
+        removeMirrorBlocks(world, sessionKey);
+        MW_MIRROR_POS.remove(sessionKey);
+        MW_START_TICK.remove(sessionKey);
+        MW_NEXT_JUMP.remove(sessionKey);
+        MW_TOUCHES.remove(sessionKey);
+        MW_DOUBLE_COOLDOWN.remove(sessionKey);
+        UUID doubleUuid = MW_DOUBLE.remove(sessionKey);
+        if (doubleUuid != null) {
+            var doubleEntity = world.getEntity(doubleUuid);
+            if (doubleEntity != null) doubleEntity.discard();
+        }
+    }
+
     /**
      * ДОБАВЛЕНО (сон "Падающие доски"): детектор падения в void. Если игрок падает ниже Y=0
      * в сне "Падающие доски", это поражение — пробуждение с исходом DIED_IN_DREAM.
@@ -2299,8 +2591,8 @@ public final class DreamManager {
     /** Пауза между блюдами (~8 сек); первая подача через 5 сек */
     private static final int FEAST_DISH_INTERVAL = 160;
     private static final int FEAST_FIRST_DISH_DELAY = 100;
-    /** Блюдо ждёт решения игрока 20 секунд, потом судьи обиженно убирают его */
-    private static final int FEAST_DISH_LIFETIME = 400;
+    /** Блюдо ждёт решения игрока 30 секунд, потом судьи обиженно убирают его */
+    private static final int FEAST_DISH_LIFETIME = 600;
     /** Рассудок за исходы блюд: съел свежее / съел тронутое / сжёг тронутое /
      *  сжёг свежее / проигнорировал (судьи убрали сами) */
     private static final float FEAST_EAT_FRESH_SANITY = 3.0f;
@@ -3136,7 +3428,7 @@ public final class DreamManager {
                     FEAST_DISH_TAKEN.put(sessionKey, true);
                     dishTaken = true;
                     player.sendMessage(net.minecraft.text.Text.literal(
-                            "§7Блюдо у тебя. Отведай его — или брось (Q) и сожги зажигалкой (ПКМ)."), true);
+                            "§7Блюдо у тебя. Свежее — съешь (зажми ПКМ). Порченое (зелёное) — брось (Q) и сожги зажигалкой (ПКМ)."), true);
                 }
 
                 // Тронутое блюдо на столе дымится зелёным — внимательный игрок заметит
@@ -3146,6 +3438,24 @@ public final class DreamManager {
                         world.spawnParticles(net.minecraft.particle.ParticleTypes.WITCH,
                                 dish.getX(), dish.getY() + 0.4, dish.getZ(),
                                 3, 0.15, 0.1, 0.15, 0.01);
+                    }
+                }
+
+                // ДОБАВЛЕНО: тронутое блюдо дымится зелёным и В РУКАХ, и брошенное на полу —
+                // после подбора столешний дым пропадал, и игрок терял нить ("ем — не нравится,
+                // жгу — не нравится": на самом деле он не видел, какое блюдо тронуто)
+                if (now % 10 == 0) {
+                    if (isTaintedDish(player.getMainHandStack()) || isTaintedDish(player.getOffHandStack())) {
+                        world.spawnParticles(net.minecraft.particle.ParticleTypes.WITCH,
+                                player.getX(), player.getY() + 1.4, player.getZ(),
+                                2, 0.25, 0.1, 0.25, 0.01);
+                    }
+                    for (ItemEntity thrown : world.getEntitiesByClass(ItemEntity.class,
+                            new net.minecraft.util.math.Box(player.getBlockPos()).expand(10, 4, 10),
+                            e -> isTaintedDish(e.getStack()))) {
+                        world.spawnParticles(net.minecraft.particle.ParticleTypes.WITCH,
+                                thrown.getX(), thrown.getY() + 0.4, thrown.getZ(),
+                                2, 0.15, 0.1, 0.15, 0.01);
                     }
                 }
 
@@ -3202,6 +3512,12 @@ public final class DreamManager {
             // 3) Подача следующего блюда
             if (now >= NEXT_DISH_TICK.getOrDefault(sessionKey, 0L)) {
                 serveNextDish(world, sessionKey, now, done == 0);
+                // ИСПРАВЛЕНО ("ем нормальную еду им не нравится"): при полной сытости ваниль
+                // не даёт есть ВООБЩЕ — блюдо висело нерешённым до дедлайна, и судьи обижались
+                // на, казалось бы, съеденное блюдо. Перед каждой подачей игрок слегка
+                // проголодается, чтобы блюдо всегда можно было отведать.
+                player.getHungerManager().setFoodLevel(12);
+                player.getHungerManager().setSaturationLevel(1.0f);
             }
         }
     }
@@ -3234,7 +3550,11 @@ public final class DreamManager {
                 : freshMenu[RANDOM.nextInt(freshMenu.length)];
 
         ItemStack stack = new ItemStack(dishItem);
-        stack.setCustomName(net.minecraft.text.Text.literal("§6Блюдо пира"));
+        // ИСПРАВЛЕНО ("не понимаю как работает"): тронутое блюдо теперь ВСЕГДА отличается
+        // именем — раньше и свежее, и тронутое назывались одинаково ("Блюдо пира"), поэтому
+        // в инвентаре их нельзя было различить, и игрок не понимал, за что судьи шипят.
+        stack.setCustomName(net.minecraft.text.Text.literal(
+                tainted ? "§2Порченое блюдо — сжечь!" : "§6Свежее блюдо пира"));
         // ИЗМЕНЕНО (фидбек "предметы не поднимаются"): блюдо МОЖНО взять в инвентарь —
         // NBT-метки сохраняются при подборе. Еда засчитывается при реальном поедании
         // из руки (как кубок), сжигание — ПКМ зажигалкой по блюду на столе или брошенному.
