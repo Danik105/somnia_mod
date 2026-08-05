@@ -451,7 +451,7 @@ public final class DreamManager {
             if (dream.id().equals(SomniumMod.id("drowning_city"))) {
                 setupDrowningCityCathedral(dreamWorld, spawnPos, groupId);
                 showHint(player, "§bНад городом возвышается затопленный собор — доберись до колокола на его вершине! "
-                    + "Световой луч укажет путь, а внутри башни — лестница наверх (без паркура).", 12);
+                    + "Собор светится в темноте (вход с любой стороны), а внутри — лестница наверх, без паркура.", 12);
             }
 
             // ДОБАВЛЕНО (сон "Кровавый пир", новая механика): пиршественный стол перед игроком
@@ -516,7 +516,7 @@ public final class DreamManager {
                 // Присоединившийся к Тонущему городу — та же подсказка про колокол собора
                 if (dream.id().equals(SomniumMod.id("drowning_city"))) {
                     showHint(player, "§bНад городом возвышается затопленный собор — доберись до колокола на его вершине! "
-                        + "Световой луч укажет путь, а внутри башни — лестница наверх (без паркура).", 12);
+                        + "Собор светится в темноте (вход с любой стороны), а внутри — лестница наверх, без паркура.", 12);
                 }
             } else {
                 SomniumMod.LOGGER.warn("[Somnium] Игрок {} присоединяется к группе {}, но GroupInfo не найдена!",
@@ -635,6 +635,21 @@ public final class DreamManager {
                     List<BlockPos> spawnPositions = maze.findMonsterSpawnPositions(origin, 0, monstersPerType);
                     for (BlockPos pos : spawnPositions) {
                         spawnOneAt(world, entityId, pos);
+                    }
+                }
+                // ДОБАВЛЕНО ("в шахте-лабиринте нету нового моба"): лабиринт огромный
+                // (123×123 блока), 4 шахтёра в случайных ячейках легко не встретить за
+                // весь сон. Дополнительно спавним одного Кричащего Шахтёра в 10-16 блоках
+                // от старта игрока — встреча гарантирована почти сразу.
+                for (int attempt = 0; attempt < 24; attempt++) {
+                    double ang = RANDOM.nextDouble() * Math.PI * 2;
+                    int dist = 10 + RANDOM.nextInt(7);
+                    BlockPos near = center.add((int) Math.round(Math.cos(ang) * dist), 0,
+                            (int) Math.round(Math.sin(ang) * dist));
+                    if (world.getBlockState(near).isAir() && world.getBlockState(near.up()).isAir()
+                            && !world.getBlockState(near.down()).isAir()) {
+                        spawnOneAt(world, SomniumMod.id("screaming_miner"), near);
+                        break;
                     }
                 }
             }
@@ -1318,6 +1333,7 @@ public final class DreamManager {
         COLLAPSING_MINE_ORIGINS.remove(dreamStateKey);
         MINE_OPENED_PASSAGES.remove(dreamStateKey);
         NEXT_MINE_SHIFT_TICK.remove(dreamStateKey);
+        MINE_NEXT_SCREAM.remove(dreamStateKey);
 
         // ДОБАВЛЕНО (сон "Кровавый пир", редизайн): стол, блюдо, курсы, кубок при пробуждении
         FEAST_TABLES.remove(dreamStateKey);
@@ -1868,6 +1884,14 @@ public final class DreamManager {
 
     /** Показывает подсказку в экшенбаре и держит её seconds секунд. */
     public static void showHint(ServerPlayerEntity player, String text, int seconds) {
+        // ИЗМЕНЕНО ("текст слишком большой, который снизу пишется — перенеси в чат"):
+        // длинные подсказки (>60 символов) в actionbar нечитаемы и перекрывают чат —
+        // отправляем их ОДИН раз в чат, где их можно спокойно перечитать.
+        // Короткие подсказки остаются в actionbar с переотправкой.
+        if (text.length() > 60) {
+            player.sendMessage(net.minecraft.text.Text.literal(text), false);
+            return;
+        }
         long until = ((ServerWorld) player.getEntityWorld()).getServer().getTicks() + seconds * 20L;
         ACTIVE_HINTS.put(player.getUuid(), new ActiveHint(text, until));
         player.sendMessage(net.minecraft.text.Text.literal(text), true);
@@ -2031,6 +2055,7 @@ public final class DreamManager {
         MIRROR_ROOM_EXIT.remove(sessionKey); MIRROR_ROOM_NEXT_EXIT_FX.remove(sessionKey);
         COLLAPSING_MINE_MAZES.remove(sessionKey); COLLAPSING_MINE_ORIGINS.remove(sessionKey);
         MINE_OPENED_PASSAGES.remove(sessionKey); NEXT_MINE_SHIFT_TICK.remove(sessionKey);
+        MINE_NEXT_SCREAM.remove(sessionKey);
     }
 
     /**
@@ -3089,6 +3114,15 @@ public final class DreamManager {
 
             int stand = DREAM_PORTAL_STAND.getOrDefault(player.getUuid(), 0) + 1;
             DREAM_PORTAL_STAND.put(player.getUuid(), stand);
+            // ДОБАВЛЕНО ("эффект, как в обычном портале, — экран штырит"): пока стоишь
+            // в портале, нарастает ванильное покачивание экрана (тошнота) + звук срабатывания
+            if (stand == 10) {
+                player.playSound(net.minecraft.sound.SoundEvents.BLOCK_PORTAL_TRIGGER, 0.5f, 0.9f);
+            }
+            if (stand >= 10) {
+                player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                        net.minecraft.entity.effect.StatusEffects.NAUSEA, 210, 0, true, false));
+            }
             if (stand == 30) {
                 player.sendMessage(net.minecraft.text.Text.literal(
                         "§5Граница снов тает под ногами..."), true);
@@ -3297,6 +3331,8 @@ public final class DreamManager {
     private static final Map<UUID, List<BlockPos>> MINE_OPENED_PASSAGES = new HashMap<>();
     /** Тик следующего сдвига стен лабиринта */
     private static final Map<UUID, Long> NEXT_MINE_SHIFT_TICK = new HashMap<>();
+    /** ДОБАВЛЕНО: тик следующего далёкого крика шахтёра (объявляет о мобе до встречи) */
+    private static final Map<UUID, Long> MINE_NEXT_SCREAM = new HashMap<>();
     /** Каждые 5 секунд лабиринт "дышит": проход за спиной открывается, другой зарастает */
     private static final int MINE_SHIFT_INTERVAL = 100;
     /** Радиус сканирования стен вокруг игрока (в ячейках сетки) */
@@ -3678,9 +3714,7 @@ public final class DreamManager {
 
             // Притяжение на дно для ВСЕХ игроков в группе.
             // ИЗМЕНЕНО ("игрока не тянет на дно", "как залезть на башню"):
-            //  - тяга начинается раньше (8 секунд, а не 20) — глубина ощущается сразу;
-            //  - тянет только когда голова ПОД ВОДОЙ (isSubmergedInWater) — ходьба по
-            //    затопленным улицам по щиколотку не топит;
+            //  - тяга начинается с 5-й секунды (раньше 20-й — её просто не успевали почувствовать);
             //  - ВНУТРИ шахты собора тяги НЕТ — иначе подняться по лестнице/пузырьковой
             //    колонне к колоколу было бы физически невозможно.
             for (UUID memberId : new ArrayList<>(ACTIVE.keySet())) {
@@ -3695,8 +3729,9 @@ public final class DreamManager {
                         && Math.abs(member.getBlockX() - bellPos.getX()) <= 5
                         && Math.abs(member.getBlockZ() - bellPos.getZ()) <= 5;
 
-                if (elapsed >= 160 && !insideTower && member.isSubmergedInWater()) {
-                    double secondsSincePull = (elapsed - 160) / 20.0;
+                if (elapsed >= 100 && !insideTower
+                        && (member.isSubmergedInWater() || member.isTouchingWater())) {
+                    double secondsSincePull = (elapsed - 100) / 20.0;
                     double pullStrength = Math.min(0.15 + secondsSincePull * 0.005, 0.35);
                     net.minecraft.util.math.Vec3d vel = member.getVelocity();
                     member.setVelocity(vel.x, vel.y - pullStrength, vel.z);
@@ -3942,23 +3977,43 @@ public final class DreamManager {
             .with(net.minecraft.block.BellBlock.ATTACHMENT, net.minecraft.block.enums.Attachment.FLOOR), 2);
         pocket.remove(bellPos);
 
-        // Входная арка 3×3 в стене со стороны спавна (на уровне воды, чтобы вплавь)
-        int offX = spawnPos.getX() - cx;
-        int offZ = spawnPos.getZ() - cz;
+        // Входные арки 3×3 на ВСЕХ ЧЕТЫРЁХ сторонах ("нету входа в эту башню") —
+        // не нужно искать единственную сторону; над каждой аркой пара морских
+        // фонарей, чтобы вход светился издалека.
         net.minecraft.block.BlockState air = net.minecraft.block.Blocks.AIR.getDefaultState();
-        if (Math.abs(offX) >= Math.abs(offZ)) {
-            int wx = cx + 4 * Integer.signum(offX == 0 ? 1 : offX);
-            for (int dz = -1; dz <= 1; dz++) {
+        for (int side = 0; side < 4; side++) {
+            boolean alongX = side < 2;
+            int sign = side % 2 == 0 ? 1 : -1;
+            for (int t = -1; t <= 1; t++) {
                 for (int y = baseY; y <= baseY + 2; y++) {
-                    world.setBlockState(new BlockPos(wx, y, cz + dz), air, 2);
+                    BlockPos arch = alongX
+                            ? new BlockPos(cx + sign * 4, y, cz + t)
+                            : new BlockPos(cx + t, y, cz + sign * 4);
+                    world.setBlockState(arch, air, 2);
                 }
+                // Фонари над аркой (по краям перемычки)
+                BlockPos lamp = alongX
+                        ? new BlockPos(cx + sign * 4, baseY + 3, cz + t * 2)
+                        : new BlockPos(cx + t * 2, baseY + 3, cz + sign * 4);
+                world.setBlockState(lamp, net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState(), 2);
             }
-        } else {
-            int wz = cz + 4 * Integer.signum(offZ);
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int y = baseY; y <= baseY + 2; y++) {
-                    world.setBlockState(new BlockPos(cx + dx, y, wz), air, 2);
-                }
+        }
+
+        // Световые "прожилки" на внешних углах башни каждые 12 блоков высоты —
+        // собор виден в темноте издалека (частицы-луч дальше ~32 блоков не рендерятся)
+        for (int y = baseY + 5; y <= wallTopY - 2; y += 12) {
+            for (int[] corner : new int[][]{ {-4, -4}, {-4, 4}, {4, -4}, {4, 4} }) {
+                world.setBlockState(new BlockPos(cx + corner[0], y, cz + corner[1]),
+                        net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState(), 2);
+            }
+        }
+
+        // ДОБАВЛЕНО ("нету дырки, чтобы попасть к колоколу"): лаз 2×2 в полу колокольни
+        // у последней ступени лестницы (виток заканчивается в углу (-3,-3)) — и для
+        // лестницы, и для пузырьковой колонны. Карман (Y=81+) остаётся сухим.
+        for (int hx = -3; hx <= -2; hx++) {
+            for (int hz = -3; hz <= -2; hz++) {
+                world.setBlockState(new BlockPos(cx + hx, chamberFloorY, cz + hz), air, 2);
             }
         }
 
@@ -4151,6 +4206,16 @@ public final class DreamManager {
             BlockPos origin = COLLAPSING_MINE_ORIGINS.get(sessionKey);
             if (player == null || maze == null || origin == null
                     || !(player.getEntityWorld() instanceof ServerWorld world)) continue;
+
+            // ДОБАВЛЕНО ("в шахте-лабиринте нету нового моба"): далёкий крик шахтёра
+            // раз в ~25-40 секунд — игрок СЛЫШИТ, что моб где-то в лабиринте, ещё до встречи.
+            long nextScream = MINE_NEXT_SCREAM.getOrDefault(sessionKey, 0L);
+            if (now >= nextScream) {
+                MINE_NEXT_SCREAM.put(sessionKey, now + 500 + RANDOM.nextInt(300));
+                world.playSound(null, player.getBlockPos(),
+                        com.somnium.mod.registry.ModSounds.MINER_SCREAM,
+                        net.minecraft.sound.SoundCategory.AMBIENT, 0.5f, 0.7f);
+            }
 
             NEXT_MINE_SHIFT_TICK.put(sessionKey, now + MINE_SHIFT_INTERVAL);
 
@@ -4373,6 +4438,24 @@ public final class DreamManager {
         FEAST_JUDGE_FOCUS_POS.remove(sessionKey);
         FEAST_JUDGE_FOCUS_UNTIL.remove(sessionKey);
         NEXT_DISH_TICK.put(sessionKey, (long) world.getServer().getTicks() + FEAST_FIRST_DISH_DELAY);
+
+        // ДОБАВЛЕНО ("Мясного голема на выходе нету"): голем-вышибала стоит у стола
+        // С САМОГО НАЧАЛА пира и охраняет место, где появится Кубок Тоста (выход из сна).
+        // Раньше он спавнился только после всех 5 блюд — игроки его просто не видели.
+        // Медленный, но бьёт по площади — к финалу за кубком придётся его обегать.
+        if (!plates.isEmpty()) {
+            BlockPos guardPlate = plates.get(plates.size() / 2);
+            var golem = com.somnium.mod.registry.ModEntities.FLESH_GOLEM.create(world);
+            if (golem != null) {
+                golem.refreshPositionAndAngles(
+                        guardPlate.getX() + 2.5, guardPlate.getY() + 1.0, guardPlate.getZ() + 2.5,
+                        0.0f, 0.0f);
+                golem.setPersistent();
+                world.spawnEntity(golem);
+                SomniumMod.LOGGER.info("[Crimson Feast] Мясной Голем-охранник заспавнен у стола в {}",
+                        guardPlate.toShortString());
+            }
+        }
     }
 
     /** Тёмно-багровая ряса судьи — кожаный доспех, окрашенный почти в чёрный. */
@@ -4683,22 +4766,8 @@ public final class DreamManager {
         ServerPlayerEntity player = world.getServer().getPlayerManager().getPlayer(sessionKey);
         if (player != null) {
             showHint(player, "§6Пир окончен. Возьми Кубок Тоста со стола — и выпей его до дна (зажми ПКМ), чтобы проснуться.", 10);
-        }
-
-        // ДОБАВЛЕНО ("Мясной Голем стоит на выходе и охраняет его"): последнее испытание пира —
-        // за кубком приходит вышибала. Он медленный, но бьёт по площади — придётся
-        // обегать его или отвлекать, пока допиваешь кубок.
-        var golem = com.somnium.mod.registry.ModEntities.FLESH_GOLEM.create(world);
-        if (golem != null) {
-            golem.refreshPositionAndAngles(
-                    plate.getX() + 2.5, plate.getY() + 1.0, plate.getZ() + 2.5, 0.0f, 0.0f);
-            golem.setPersistent();
-            world.spawnEntity(golem);
-            world.playSound(null, plate, net.minecraft.sound.SoundEvents.ENTITY_RAVAGER_ROAR,
-                    net.minecraft.sound.SoundCategory.HOSTILE, 1.0f, 0.5f);
-            if (player != null) {
-                showHint(player, "§4Мясной Голем охраняет Кубок Тоста! Осторожно: он бьёт по площади.", 8);
-            }
+            // Голем-охранник уже стоит у стола с начала пира — напоминаем об опасности
+            showHint(player, "§4Мясной Голем охраняет Кубок Тоста! Осторожно: он бьёт по площади.", 8);
         }
     }
 

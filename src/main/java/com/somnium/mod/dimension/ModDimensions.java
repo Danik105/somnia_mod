@@ -92,7 +92,10 @@ public final class ModDimensions {
      */
     public static int platformSurfaceY(RegistryKey<World> dimension) {
         // Считаем от min_y = 0 (см. dream_dimension_type.json) + сумма высот слоёв "layers".
-        if (dimension.equals(DROWNING_CITY)) return 0 + 1 + 4 + 2 + 3;   // bedrock(1) + stone(4) + sand(2) + water(3) = 10
+        // ИСПРАВЛЕНО ("спавнится высоко" в Тонущем городе): в generator JSON слоёв воды НЕТ
+        // (только bedrock+stone+sand), поэтому реальная поверхность — Y=7, а не 10.
+        // Со старым значением 10 игрок появлялся в 3 блоках над землёй и падал.
+        if (dimension.equals(DROWNING_CITY)) return 0 + 1 + 4 + 2;       // bedrock(1) + stone(4) + sand(2) = 7
         if (dimension.equals(SHADOW_FOREST)) return 0 + 1 + 3 + 1;       // bedrock(1) + dirt(3) + podzol(1) = 5
         if (dimension.equals(MIRROR_WASTES)) return 0 + 1 + 3 + 2;       // bedrock(1) + sandstone(3) + sand(2) = 6
         if (dimension.equals(COLLAPSING_MINE)) return 0 + 1 + 30 + 1;    // bedrock(1) + stone(30) + cobblestone(1) = 32
