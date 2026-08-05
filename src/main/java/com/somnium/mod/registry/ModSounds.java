@@ -1,55 +1,59 @@
 package com.somnium.mod.registry;
 
 import com.somnium.mod.SomniumMod;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.Registry;
 import net.minecraft.sound.SoundEvent;
-import net.minecraft.sound.SoundEvents;
+import net.minecraft.util.Identifier;
 
 /**
- * ИСПРАВЛЕНО ("никакого шёпота нету", "добавь тревожную музыку"): раньше здесь
- * регистрировались СВОИ SoundEvent'ы (somnium:ambient.sanity.whisper и т.д.) — но ни
- * assets/somnium/sounds.json, ни сами .ogg файлы никогда не существовали. Это не крашит игру,
- * а просто тихо ничего не проигрывает (в логе клиента в лучшем случае "Missing sound for
- * event"). Хуже того: из 5 объявленных звуков только 2 (MINER_SCREAM, DREAM_WAKE) вообще
- * вызывались из кода — WHISPER_AMBIENT, RUPTURE_STINGER и DREAM_ENTER не были подключены НИ К
- * ЧЕМУ, то есть даже с реальными .ogg-файлами их всё равно никто бы не услышал.
+ * Кастомные звуки Somnium ("кастомные звуки: микс ИИ + ваниль").
  *
- * У меня в рабочей среде нет доступа к аудио-редактору или интернету, чтобы записать/скачать
- * настоящие .ogg-файлы — поэтому вместо кастомных звуков мод теперь напрямую переиспользует
- * уже существующие ванильные SoundEvent'ы (они гарантированно есть на клиенте у каждого
- * игрока, без sounds.json). Тот же приём уже применён к рендереру мобов (см.
- * NightmarePlaceholderRenderer — ванильные текстуры вместо кастомных ассетов).
+ * Раньше здесь были прямые ссылки на ванильные SoundEvent'ы, потому что в рабочей среде
+ * не было способа получить настоящие аудиофайлы. Теперь звуки сгенерированы ИИ и лежат в
+ * assets/somnium/sounds/*.ogg (см. assets/somnium/sounds.json), поэтому регистрируем
+ * собственные SoundEvent'ы по-настоящему — Registry.register(Registries.SOUND_EVENT, ...).
  *
- * Реальное воспроизведение см.:
- *  - MINER_SCREAM   — ScreamingMinerEntity (при агро)
- *  - DREAM_WAKE     — WakingBellItem (использование предмета)
- *  - WHISPER_AMBIENT, DREAM_DREAD_AMBIENCE — DreamManager#tickDreamAmbience (ДОБАВЛЕНО:
- *    периодический "шёпот за спиной" в Лесу теней + общая тревожная фоновая атмосфера
- *    во всех снов)
- *  - RUPTURE_STINGER — BleedThroughManager#tryRupture (ДОБАВЛЕНО: резкий акцент в момент
- *    прорыва кошмаров в реальность)
- *  - DREAM_ENTER — DreamManager#enterDream (ДОБАВЛЕНО: звук при входе в сон)
+ * Микс с ванилью: часть звуков остаётся ванильной там, где она и так идеальна
+ * (шаги, удары, стекло мелких осколков, партикловые звуки внутри сущностей и т.п.),
+ * а КЛЮЧЕВЫЕ атмосферные события заменены на кастомные:
+ *  - DREAM_ENTER        — переход в сон (warped music box + whoosh), 5с
+ *  - DREAM_WAKE         — пробуждение (вдох облегчения + тёплый колокольчик), 3с
+ *  - DREAM_DREAD_AMBIENCE — тревожный фоновый дрон во всех снах, 20с
+ *  - WHISPER_AMBIENT    — шёпот за спиной (Лес теней), 5с
+ *  - RUPTURE_STINGER    — стингер прорыва кошмара в реальность, 2.5с
+ *  - MINER_SCREAM       — крик Кричащего Шахтёра с эхом шахты, 3с
+ *  - EXIT_PORTAL        — открытие выхода из сна (колокол собора / зеркало выхода), 4с
+ *  - WATER_RISE         — подъём воды в Тонущем городе, 3с
+ *  - MIRROR_SHATTER     — разрушение зеркальной стены в Зеркальной комнате, 2.5с
  *
- * ПРОВЕРИТЬ ПРИ ПЕРВОЙ СБОРКЕ: поля SoundEvents.* здесь имеют тип RegistryEntry&lt;SoundEvent&gt;
- * (актуально с ~1.19.3), поэтому распаковываются через .value() — если в вашей версии Yarn
- * SoundEvents.* остались просто SoundEvent (более старый API), уберите .value() по ошибке
- * компилятора.
+ * ВАЖНО: имена констант совпадают с именами файлов и ключами в sounds.json.
+ * Точки вызова НЕ менялись — все места, где использовались ModSounds.*, продолжают
+ * работать, просто теперь звук реальный.
  */
 public final class ModSounds {
 
     private ModSounds() {}
 
-    public static final SoundEvent DREAM_WAKE = SoundEvents.BLOCK_BELL_USE;
-    public static final SoundEvent DREAM_ENTER = SoundEvents.BLOCK_PORTAL_TRAVEL;
-    public static final SoundEvent DREAM_DREAD_AMBIENCE =
-        SoundEvents.AMBIENT_CAVE.value();
-    public static final SoundEvent RUPTURE_STINGER = SoundEvents.ENTITY_WITHER_SPAWN;
-    public static final SoundEvent WHISPER_AMBIENT = SoundEvents.ENTITY_ENDERMAN_AMBIENT;
-    public static final SoundEvent MINER_SCREAM = SoundEvents.ENTITY_GHAST_SCREAM;
+    public static final SoundEvent DREAM_WAKE = register("dream_wake");
+    public static final SoundEvent DREAM_ENTER = register("dream_enter");
+    public static final SoundEvent DREAM_DREAD_AMBIENCE = register("dread_ambience");
+    public static final SoundEvent RUPTURE_STINGER = register("rupture_stinger");
+    public static final SoundEvent WHISPER_AMBIENT = register("whisper_ambient");
+    public static final SoundEvent MINER_SCREAM = register("miner_scream");
+    public static final SoundEvent EXIT_PORTAL = register("exit_portal");
+    public static final SoundEvent WATER_RISE = register("water_rise");
+    public static final SoundEvent MIRROR_SHATTER = register("mirror_shatter");
+
+    private static SoundEvent register(String name) {
+        Identifier id = SomniumMod.id(name);
+        return Registry.register(Registries.SOUND_EVENT, id, SoundEvent.of(id));
+    }
 
     public static void register() {
-        // Регистрировать больше нечего — все звуки выше это прямые ссылки на уже существующие
-        // ванильные SoundEvent'ы. Метод оставлен ради единообразия точки входа (вызывается из
-        // SomniumMod#onInitialize вместе с остальными register()).
-        SomniumMod.LOGGER.info("[Somnium] Звуки подключены (используются ванильные SoundEvent'ы)");
+        // Сами SoundEvent'ы зарегистрированы статически выше; метод оставлен ради
+        // единообразия точки входа (вызывается из SomniumMod#onInitialize вместе с
+        // остальными register()).
+        SomniumMod.LOGGER.info("[Somnium] Звуки зарегистрированы (9 кастомных .ogg + ванильные в точках, где они уместнее)");
     }
 }

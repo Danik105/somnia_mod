@@ -1,0 +1,47 @@
+{
+  "dream_enter": {
+    "category": "ambient",
+    "subtitle": "subtitles.somnium.dream_enter",
+    "sounds": [ { "name": "somnium:dream_enter" } ]
+  },
+  "dream_wake": {
+    "category": "players",
+    "subtitle": "subtitles.somnium.dream_wake",
+    "sounds": [ { "name": "somnium:dream_wake" } ]
+  },
+  "dread_ambience": {
+    "category": "ambient",
+    "subtitle": "subtitles.somnium.dread_ambience",
+    "sounds": [ { "name": "somnium:dread_ambience" } ]
+  },
+  "whisper_ambient": {
+    "category": "ambient",
+    "subtitle": "subtitles.somnium.whisper_ambient",
+    "sounds": [ { "name": "somnium:whisper_ambient" } ]
+  },
+  "rupture_stinger": {
+    "category": "hostile",
+    "subtitle": "subtitles.somnium.rupture_stinger",
+    "sounds": [ { "name": "somnium:rupture_stinger" } ]
+  },
+  "miner_scream": {
+    "category": "hostile",
+    "subtitle": "subtitles.somnium.miner_scream",
+    "sounds": [ { "name": "somnium:miner_scream" } ]
+  },
+  "exit_portal": {
+    "category": "ambient",
+    "subtitle": "subtitles.somnium.exit_portal",
+    "sounds": [ { "name": "somnium:exit_portal" } ]
+  },
+  "water_rise": {
+    "category": "ambient",
+    "subtitle": "subtitles.somnium.water_rise",
+    "sounds": [ { "name": "somnium:water_rise" } ]
+  },
+  "mirror_shatter": {
+    "category": "block",
+    "subtitle": "subtitles.somnium.mirror_shatter",
+    "sounds": [ { "name": "somnium:mirror_shatter" } ]
+  }
+}

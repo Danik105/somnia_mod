@@ -446,6 +446,14 @@ public final class DreamManager {
                 setupStairwell(dreamWorld, spawnPos, groupId);
             }
 
+            // ДОБАВЛЕНО (выход из "Тонущего города"): затопленный собор с колоколом
+            // на вершине — воздушный карман над максимальным уровнем воды.
+            if (dream.id().equals(SomniumMod.id("drowning_city"))) {
+                setupDrowningCityCathedral(dreamWorld, spawnPos, groupId);
+                showHint(player, "§bНад городом возвышается затопленный собор — доберись до колокола на его вершине! "
+                    + "Световой луч укажет путь, а внутри башни — лестница наверх (без паркура).", 12);
+            }
+
             // ДОБАВЛЕНО (сон "Кровавый пир", новая механика): пиршественный стол перед игроком
             // ИЗМЕНЕНО: используем groupId вместо player.getUuid() для ключа общего стейта
             if (dream.id().equals(SomniumMod.id("crimson_feast"))) {
@@ -476,6 +484,13 @@ public final class DreamManager {
                 spawnWakeDoorMarker(dreamWorld, doorPos);
                 // ДОБАВЛЕНО: инициализируем трекер двери для этого игрока
                 WakeDoorTracker.onDreamStart(player.getUuid());
+
+                // ДОБАВЛЕНО ("в шахте-лабиринте нужен компас, ведущий к выходу"):
+                // лоудстоун-компас, привязанный к двери выхода в этом измерении
+                if (dream.id().equals(SomniumMod.id("collapsing_mine")) && doorPos != null) {
+                    giveMineCompass(player, dreamWorld, doorPos);
+                    showHint(player, "§bКомпас Выхода у тебя в инвентаре — стрелка указывает на дверь из шахты.", 9);
+                }
             } else if (dream.objectiveType() == DreamObjectiveType.COLLECT_ITEMS) {
                 spawnCollectibleItems(dreamWorld, spawnPos, dream.objectiveTargetId(), dream.objectiveCount());
             }
@@ -493,6 +508,15 @@ public final class DreamManager {
                 // Инициализируем трекер двери для присоединившегося игрока, если цель — REACH_DOOR
                 if (dream.objectiveType() == DreamObjectiveType.REACH_DOOR) {
                     WakeDoorTracker.onDreamStart(player.getUuid());
+                    // Присоединившийся к шахте тоже получает свой Компас Выхода
+                    if (dream.id().equals(SomniumMod.id("collapsing_mine")) && doorPos != null) {
+                        giveMineCompass(player, dreamWorld, doorPos);
+                    }
+                }
+                // Присоединившийся к Тонущему городу — та же подсказка про колокол собора
+                if (dream.id().equals(SomniumMod.id("drowning_city"))) {
+                    showHint(player, "§bНад городом возвышается затопленный собор — доберись до колокола на его вершине! "
+                        + "Световой луч укажет путь, а внутри башни — лестница наверх (без паркура).", 12);
                 }
             } else {
                 SomniumMod.LOGGER.warn("[Somnium] Игрок {} присоединяется к группе {}, но GroupInfo не найдена!",
@@ -751,6 +775,26 @@ public final class DreamManager {
      * ИЗМЕНЕНО: вместо невидимого маркера теперь ставится настоящая белая берёзовая дверь,
      * которую нужно открыть и пройти сквозь неё. Дверь окружена светящимися блоками для видимости.
      */
+    /**
+     * ДОБАВЛЕНО ("компас к выходу в шахте"): выдаёт лоудстоун-компас, навсегда привязанный
+     * к двери выхода. LodestoneTracked=false — стрелка не крутится, даже если рядом нет
+     * магнетита; привязка к измерению сна — в реальном мире крутится бесцельно.
+     * Исчезает при пробуждении вместе со всем сонным инвентарём.
+     */
+    private static void giveMineCompass(ServerPlayerEntity player, ServerWorld world, BlockPos exitPos) {
+        ItemStack compass = new ItemStack(net.minecraft.item.Items.COMPASS);
+        var nbt = compass.getOrCreateNbt();
+        nbt.putBoolean("LodestoneTracked", false);
+        nbt.putString("LodestoneDimension", world.getRegistryKey().getValue().toString());
+        var posNbt = new net.minecraft.nbt.NbtCompound();
+        posNbt.putInt("X", exitPos.getX());
+        posNbt.putInt("Y", exitPos.getY());
+        posNbt.putInt("Z", exitPos.getZ());
+        nbt.put("LodestonePos", posNbt);
+        compass.setCustomName(net.minecraft.text.Text.literal("§bКомпас Выхода"));
+        player.getInventory().offerOrDrop(compass);
+    }
+
     private static void spawnWakeDoorMarker(ServerWorld world, BlockPos pos) {
         // Ставим фундамент из гладкого кварца (красивая белая платформа)
         for (int x = -1; x <= 1; x++) {
@@ -1093,6 +1137,10 @@ public final class DreamManager {
     /** Проверка условия цели конкретного сна — см. DreamObjectiveType для описания каждого типа. */
     private static boolean isObjectiveComplete(ServerPlayerEntity player, ActiveDream active) {
         if (active.objectiveType() == null) return false;
+        // ИЗМЕНЕНО (выход из "Зеркальной комнаты"): победа над отражением больше не будит
+        // мгновенно — после неё в стене открывается зеркало выхода (см. tickMirrorRoomGlass),
+        // и сон завершается шагом в свет. Иначе игрок просыпался бы прямо на месте боя.
+        if (active.dreamId().equals(SomniumMod.id("mirror_room"))) return false;
         return switch (active.objectiveType()) {
             case REACH_DOOR -> active.doorPos() != null
                     && WakeDoorTracker.isObjectiveComplete(player.getUuid(), active.doorPos(), player.getBlockPos());
@@ -1251,11 +1299,19 @@ public final class DreamManager {
         MIRROR_ROOM_GLASS.remove(dreamStateKey);
         MIRROR_GLASS_BREAK_TIME.remove(dreamStateKey);
         MIRROR_ROOM_CORNER.remove(dreamStateKey);
+        MIRROR_ROOM_EXIT.remove(dreamStateKey);
+        MIRROR_ROOM_NEXT_EXIT_FX.remove(dreamStateKey);
         PENDING_MIRROR_INIT.remove(player.getUuid());
 
         // ДОБАВЛЕНО (сон "Тонущий город"): очищаем данные об уровне воды при пробуждении
         DROWNING_CITY_WATER_LEVEL.remove(dreamStateKey);
         DROWNING_CITY_FILL_QUEUE.remove(dreamStateKey);
+        // ДОБАВЛЕНО (выход через колокол собора): колокол, карман, маяк, осушка
+        DROWNING_CITY_BELL_POS.remove(dreamStateKey);
+        DROWNING_CITY_AIR_POCKET.remove(dreamStateKey);
+        DROWNING_CITY_NEXT_BEAM.remove(dreamStateKey);
+        DROWNING_CITY_DRAIN_LEVEL.remove(dreamStateKey);
+        DROWNING_CITY_DRAIN_QUEUE.remove(dreamStateKey);
 
         // ДОБАВЛЕНО (сон "Обрушающаяся шахта"): очищаем данные о лабиринте при пробуждении
         COLLAPSING_MINE_MAZES.remove(dreamStateKey);
@@ -1297,6 +1353,9 @@ public final class DreamManager {
         VOE_START_TICK.remove(dreamStateKey);
         VOE_DISPELLED.remove(dreamStateKey);
         VOE_TOUCH_COOLDOWN.clear(); // кулдауны привязаны к сущностям сна — они исчезают вместе с ним
+
+        // ДОБАВЛЕНО (долгие подсказки): на яву сонные подсказки не тянем
+        ACTIVE_HINTS.remove(player.getUuid());
 
         // ДОБАВЛЕНО (сон "Сон-в-сне"): очищаем данные о погоде при пробуждении
         DREAM_WITHIN_DREAM_ORIGINAL_POS.remove(player.getUuid());
@@ -1754,7 +1813,9 @@ public final class DreamManager {
     private static final Map<UUID, Integer> STAIR_ROTTEN_STAND = new HashMap<>();
 
     /** Этажей в подъезде; этаж = 4 фрагмента (площадка, марш, площадка, марш), +8 высоты */
-    private static final int STAIR_FLOORS = 5;
+    // ИЗМЕНЕНО ("лестница вверх должна быть дольше"): было 5 этажей (~40 блоков подъёма),
+    // стало 8 (~64 блока) — подъезд ощущается бесконечным, как в страшном сне
+    private static final int STAIR_FLOORS = 8;
     /** Финальный фрагмент — площадка последнего этажа с люком */
     private static final int STAIR_FINAL_STAGE = STAIR_FLOORS * 4;
     /** Сколько фрагментов строим вперёд от игрока */
@@ -1787,15 +1848,48 @@ public final class DreamManager {
     private static final Map<UUID, Map<BlockPos, Integer>> STAIR_BROKEN_STAGE = new HashMap<>();
     private record StairCrumble(List<BlockPos> positions, List<net.minecraft.block.BlockState> states,
                                 int stage, long breakTick) {}
+    // ИЗМЕНЕНО ("ступеньки должны ломаться быстрее — локация пробегается насквозь"):
+    // волна стартует почти сразу, треск короче, ряды сыплются чаще
     /** Пауза после входа на марш перед началом обвала */
-    private static final int STAIR_CRUMBLE_START_DELAY = 15;
-    /** Ряд трещит 4 тика, потом падает; следующий ряд — через 6 тиков */
-    private static final int STAIR_CRUMBLE_WARN_TICKS = 4;
-    private static final int STAIR_CRUMBLE_ROW_INTERVAL = 6;
+    private static final int STAIR_CRUMBLE_START_DELAY = 8;
+    /** Ряд трещит пару тиков, потом падает; следующий ряд — через 4 тика */
+    private static final int STAIR_CRUMBLE_WARN_TICKS = 2;
+    private static final int STAIR_CRUMBLE_ROW_INTERVAL = 4;
     /** Сломанный ряд "заживает" обратно через 4.5 сек — марш можно пройти снова */
     private static final int STAIR_CRUMBLE_RESTORE_TICKS = 90;
 
     // ===== ДОБАВЛЕНО (сон "Пустота с глазами", фидбек "не хватает движа в начале") =====
+    // ===== ДОБАВЛЕНО ("текст во снах быстро пропадает"): долгие подсказки =====
+    // Ванильный экшенбар держит сообщение ~3 секунды — важные инструкции не успевают
+    // прочитать. showHint() держит текст указанное время, переотправляя его каждые
+    // 1,25 секунды, пока не истечёт срок (см. tickHints).
+    private record ActiveHint(String text, long untilTick) {}
+    private static final Map<UUID, ActiveHint> ACTIVE_HINTS = new HashMap<>();
+
+    /** Показывает подсказку в экшенбаре и держит её seconds секунд. */
+    public static void showHint(ServerPlayerEntity player, String text, int seconds) {
+        long until = ((ServerWorld) player.getEntityWorld()).getServer().getTicks() + seconds * 20L;
+        ACTIVE_HINTS.put(player.getUuid(), new ActiveHint(text, until));
+        player.sendMessage(net.minecraft.text.Text.literal(text), true);
+    }
+
+    /** Переотправляет активные подсказки, чтобы они не гасли. Вызывается каждый тик. */
+    public static void tickHints(MinecraftServer server) {
+        if (ACTIVE_HINTS.isEmpty()) return;
+        long now = server.getTicks();
+        for (Map.Entry<UUID, ActiveHint> entry : new ArrayList<>(ACTIVE_HINTS.entrySet())) {
+            if (now >= entry.getValue().untilTick()) {
+                ACTIVE_HINTS.remove(entry.getKey());
+                continue;
+            }
+            if (now % 25 != 0) continue;
+            ServerPlayerEntity player = server.getPlayerManager().getPlayer(entry.getKey());
+            if (player != null) {
+                player.sendMessage(net.minecraft.text.Text.literal(entry.getValue().text()), true);
+            }
+        }
+    }
+
     /** Тик входа в сон (ленивая инициализация в tickVoidOfEyes) */
     private static final Map<UUID, Long> VOE_START_TICK = new HashMap<>();
 
@@ -1883,6 +1977,29 @@ public final class DreamManager {
             }
         }
 
+        // 2.5) Тонущий город: сносим собор прошлого захода (он каждый раз строится
+        // в новом месте) и планируем осушку оставшейся воды — иначе повторный заход
+        // начинался бы в уже затопленном городе ("сон не сбрасывается").
+        if (dreamId.equals(SomniumMod.id("drowning_city"))) {
+            BlockPos oldBell = DROWNING_CITY_BELL_POS.remove(sessionKey);
+            if (oldBell != null) {
+                net.minecraft.block.BlockState airState = net.minecraft.block.Blocks.AIR.getDefaultState();
+                BlockPos.Mutable ruinPos = new BlockPos.Mutable();
+                for (int dx = -6; dx <= 6; dx++) {
+                    for (int dz = -6; dz <= 6; dz++) {
+                        for (int y = DROWNING_CITY_START_Y; y <= DROWNING_CITY_MAX_Y + 6; y++) {
+                            ruinPos.set(oldBell.getX() + dx, y, oldBell.getZ() + dz);
+                            if (!world.getBlockState(ruinPos).isAir()) {
+                                world.setBlockState(ruinPos, airState, 2);
+                            }
+                        }
+                    }
+                }
+            }
+            // Осушку выполняет tickDrowningCityWater (снизу вверх, батчами)
+            DROWNING_CITY_DRAIN_LEVEL.put(sessionKey, DROWNING_CITY_START_Y);
+        }
+
         // 3) Обнуляем все per-session стейт-мапы
         STAIR_ORIGIN.remove(sessionKey); STAIR_BUILT_STAGES.remove(sessionKey);
         STAIR_STAGE_BLOCKS.remove(sessionKey); STAIR_COLLAPSE_NEXT.remove(sessionKey);
@@ -1909,6 +2026,9 @@ public final class DreamManager {
         MIRROR_ROOM_GLASS.remove(sessionKey); MIRROR_GLASS_BREAK_TIME.remove(sessionKey);
         MIRROR_ROOM_CORNER.remove(sessionKey); PENDING_MIRROR_INIT.remove(sessionKey);
         DROWNING_CITY_WATER_LEVEL.remove(sessionKey); DROWNING_CITY_FILL_QUEUE.remove(sessionKey);
+        DROWNING_CITY_AIR_POCKET.remove(sessionKey); DROWNING_CITY_NEXT_BEAM.remove(sessionKey);
+        DROWNING_CITY_DRAIN_QUEUE.remove(sessionKey);
+        MIRROR_ROOM_EXIT.remove(sessionKey); MIRROR_ROOM_NEXT_EXIT_FX.remove(sessionKey);
         COLLAPSING_MINE_MAZES.remove(sessionKey); COLLAPSING_MINE_ORIGINS.remove(sessionKey);
         MINE_OPENED_PASSAGES.remove(sessionKey); NEXT_MINE_SHIFT_TICK.remove(sessionKey);
     }
@@ -2240,7 +2360,7 @@ public final class DreamManager {
                                 net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.5f);
                     } else {
                         // Впереди уже всё обрушено — проверимся позже
-                        STAIR_NEXT_CRUMBLE_TICK.put(sessionKey, now + 10);
+                        STAIR_NEXT_CRUMBLE_TICK.put(sessionKey, now + 6);
                     }
                 }
             } else {
@@ -2394,8 +2514,7 @@ public final class DreamManager {
                                 hatch.getX() + 0.5, hatch.getY() - 1.5, hatch.getZ() + 0.5,
                                 30, 0.3, 1.2, 0.3, 0.02);
                     } else if (hatch.getSquaredDistance(player.getBlockPos()) < 36 && now % 60 == 0) {
-                        player.sendMessage(net.minecraft.text.Text.literal(
-                                "§7ПКМ по люку в потолке — выход из сна."), true);
+                        showHint(player, "§7ПКМ по люку в потолке — выход из сна.", 6);
                     }
                 } else if (now >= wakeTick) {
                     wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
@@ -2753,9 +2872,8 @@ public final class DreamManager {
             // 0) Ленивая инициализация
             if (!VOE_START_TICK.containsKey(sessionKey)) {
                 VOE_START_TICK.put(sessionKey, now);
-                player.sendMessage(net.minecraft.text.Text.literal(
-                        "§5Ты не один в этой тьме. Смотри Наблюдателям прямо в глаза — твой взгляд жжёт их. "
-                                + "Перехвати " + VOE_DISPEL_NEEDED + " взглядов, чтобы проснуться."), true);
+                showHint(player, "§5Ты не один в этой тьме. Смотри Наблюдателям прямо в глаза — твой взгляд жжёт их. "
+                        + "Перехвати " + VOE_DISPEL_NEEDED + " взглядов, чтобы проснуться.", 12);
             }
             long elapsed = now - VOE_START_TICK.get(sessionKey);
 
@@ -2939,7 +3057,23 @@ public final class DreamManager {
 
     /** Тик портала снов: отсчёт стояния в плёнке и телепортация туда-обратно. */
     public static void tickDreamPortal(MinecraftServer server) {
-        if (DREAM_PORTAL_STAND.isEmpty() && server.getPlayerManager().getPlayerList().isEmpty()) return;
+        if (DREAM_PORTAL_STAND.isEmpty() && DREAM_PORTAL_FX.isEmpty()
+                && server.getPlayerManager().getPlayerList().isEmpty()) return;
+
+        // Шлейф частиц у недавно перенесённых порталом игроков (3 секунды)
+        if (!DREAM_PORTAL_FX.isEmpty()) {
+            long fxNow = server.getTicks();
+            for (Map.Entry<UUID, Long> fx : new ArrayList<>(DREAM_PORTAL_FX.entrySet())) {
+                if (fxNow >= fx.getValue()) { DREAM_PORTAL_FX.remove(fx.getKey()); continue; }
+                ServerPlayerEntity fxPlayer = server.getPlayerManager().getPlayer(fx.getKey());
+                if (fxPlayer != null && fxNow % 2 == 0
+                        && fxPlayer.getEntityWorld() instanceof ServerWorld fxWorld) {
+                    fxWorld.spawnParticles(net.minecraft.particle.ParticleTypes.REVERSE_PORTAL,
+                            fxPlayer.getX(), fxPlayer.getY() + 1.0, fxPlayer.getZ(),
+                            6, 0.35, 0.6, 0.35, 0.02);
+                }
+            }
+        }
 
         for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
             if (!(player.getEntityWorld() instanceof ServerWorld world)) continue;
@@ -2984,8 +3118,7 @@ public final class DreamManager {
                 DreamPortalHelper.ensureDreamPortalBuilt(dreamWorld);
                 double[] arrival = DreamPortalHelper.dreamArrivalPoint();
                 player.teleport(dreamWorld, arrival[0], arrival[1], arrival[2], 180.0f, 0.0f);
-                player.sendMessage(net.minecraft.text.Text.literal(
-                        "§5Ты шагнул в мир снов. Встречный портал на платформе вернёт тебя домой."), true);
+                showHint(player, "§5Ты шагнул в мир снов. Встречный портал на платформе вернёт тебя домой.", 9);
                 dreamWorld.playSound(null, arrival[0], arrival[1], arrival[2],
                         net.minecraft.sound.SoundEvents.BLOCK_PORTAL_TRAVEL,
                         net.minecraft.sound.SoundCategory.PLAYERS, 0.6f, 0.8f);
@@ -3000,8 +3133,11 @@ public final class DreamManager {
      */
     private static void applyPortalTravelEffects(ServerPlayerEntity player, ServerWorld world,
                                                  double x, double y, double z, boolean wakingUp) {
+        // ИЗМЕНЕНО ("переход без анимации эффектов"): кромешная тьма вместо короткой
+        // слепоты (мягкое затухание), кружение, парение + 3 секунды шлейфа частиц
+        // вокруг игрока (см. DREAM_PORTAL_FX в tickDreamPortal) и титул по центру экрана.
         player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                net.minecraft.entity.effect.StatusEffects.BLINDNESS, 50, 0, false, false));
+                net.minecraft.entity.effect.StatusEffects.DARKNESS, 90, 0, false, false));
         player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
                 net.minecraft.entity.effect.StatusEffects.NAUSEA, 220, 0, false, false));
         player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
@@ -3014,7 +3150,19 @@ public final class DreamManager {
                 wakingUp ? net.minecraft.sound.SoundEvents.ENTITY_PLAYER_LEVELUP
                         : net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
                 net.minecraft.sound.SoundCategory.PLAYERS, 0.5f, wakingUp ? 1.4f : 0.6f);
+
+        // Титул по центру экрана
+        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.TitleS2CPacket(
+                net.minecraft.text.Text.literal(wakingUp ? "§7Реальность" : "§5Мир Снов")));
+        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.SubtitleS2CPacket(
+                net.minecraft.text.Text.literal(wakingUp ? "§8...ты вынырнул из сна" : "§8...граница позади")));
+
+        // Шлейф частиц на 3 секунды после перехода
+        DREAM_PORTAL_FX.put(player.getUuid(), world.getServer().getTicks() + 60L);
     }
+
+    /** Игроки, недавно прошедшие портал снов -> тик окончания шлейфа частиц */
+    private static final Map<UUID, Long> DREAM_PORTAL_FX = new HashMap<>();
 
     /** Полная очистка per-session данных сна "Пустошь зеркал" */
     private static void clearMirrorWastesData(ServerWorld world, UUID sessionKey) {
@@ -3081,6 +3229,13 @@ public final class DreamManager {
     /** ИСПРАВЛЕНИЕ: очередь отложенной инициализации MirrorReflection (UUID босса + оставшиеся тики до инициализации) */
     private static final Map<UUID, MirrorInitData> PENDING_MIRROR_INIT = new HashMap<>();
 
+    // ДОБАВЛЕНО (выход из "Зеркальной комнаты"): после победы над отражением в стене
+    // открывается ниша со светом — "зеркало выхода", шаг в него = пробуждение.
+    /** Центр ниши выхода для каждой сессии (null, пока отражение не побеждено) */
+    private static final Map<UUID, BlockPos> MIRROR_ROOM_EXIT = new HashMap<>();
+    /** Тик следующей порции частиц у зеркала выхода */
+    private static final Map<UUID, Long> MIRROR_ROOM_NEXT_EXIT_FX = new HashMap<>();
+
     /** Данные для отложенной инициализации зеркального отражения */
     private record MirrorInitData(UUID bossUuid, int ticksRemaining) {}
 
@@ -3113,6 +3268,24 @@ public final class DreamManager {
      * лаг-спайков: 2048 setBlockState за тик не просаживают сервер).
      */
     private static final int DROWNING_CITY_FILL_BATCH = 2048;
+
+    // ДОБАВЛЕНО (выход из "Тонущего города"): затопленный собор с колоколом на вершине.
+    /** Позиция колокола (центр воздушного кармана) для каждой сессии */
+    private static final Map<UUID, BlockPos> DROWNING_CITY_BELL_POS = new HashMap<>();
+    /**
+     * Воздушный карман колокольни — эти позиции НЕЛЬЗЯ заливать водой
+     * (иначе "сухая" комната с колоколом затопилась бы вместе со всем слоем).
+     */
+    private static final Map<UUID, java.util.Set<BlockPos>> DROWNING_CITY_AIR_POCKET = new HashMap<>();
+    /** Тик следующего светового луча-маяка над собором */
+    private static final Map<UUID, Long> DROWNING_CITY_NEXT_BEAM = new HashMap<>();
+    /**
+     * Сброс воды между заходами ("повторно попадаешь в сон — он не сбрасывается"):
+     * уровень слоя, который сейчас ОСУШАЕТСЯ (снизу вверх), null если осушки нет.
+     */
+    private static final Map<UUID, Integer> DROWNING_CITY_DRAIN_LEVEL = new HashMap<>();
+    /** Очередь позиций воды на осушение (батчами, как и заливка) */
+    private static final Map<UUID, java.util.ArrayDeque<BlockPos>> DROWNING_CITY_DRAIN_QUEUE = new HashMap<>();
 
     /** ДОБАВЛЕНО: Лабиринт шахты - генераторы лабиринтов для каждого игрока */
     private static final Map<UUID, MazeGenerator> COLLAPSING_MINE_MAZES = new HashMap<>();
@@ -3325,43 +3498,153 @@ public final class DreamManager {
             if (active == null || !active.dreamId().equals(SomniumMod.id("mirror_room"))) continue;
 
             UUID sessionKey = sessionKey(playerId);
+
+            // ---- ДОБАВЛЕНО (выход из сна): шаг в зеркало выхода = пробуждение ----
+            // Проверяется для КАЖДОГО игрока (а не раз на сессию): в свет заходит каждый сам.
+            BlockPos exitPos = MIRROR_ROOM_EXIT.get(sessionKey);
+            if (exitPos != null) {
+                ServerPlayerEntity exitPlayer = server.getPlayerManager().getPlayer(playerId);
+                if (exitPlayer != null) {
+                    double edx = exitPlayer.getX() - (exitPos.getX() + 0.5);
+                    double edy = exitPlayer.getY() - exitPos.getY();
+                    double edz = exitPlayer.getZ() - (exitPos.getZ() + 0.5);
+                    if (edx * edx + edy * edy + edz * edz <= 3.24) { // 1.8 блока — надо войти в нишу
+                        exitPlayer.playSound(com.somnium.mod.registry.ModSounds.EXIT_PORTAL, 1.0f, 1.0f);
+                        if (exitPlayer.getEntityWorld() instanceof ServerWorld exitWorld) {
+                            exitWorld.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                                exitPlayer.getX(), exitPlayer.getY() + 1.0, exitPlayer.getZ(),
+                                40, 0.6, 1.0, 0.6, 0.05);
+                        }
+                        SomniumMod.LOGGER.info("[Mirror Room] Игрок {} шагнул в зеркало выхода",
+                            exitPlayer.getName().getString());
+                        wake(exitPlayer, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
+                        continue;
+                    }
+                }
+            }
+
             if (processedSessions.contains(sessionKey)) continue; // уже обработали для этой группы
             processedSessions.add(sessionKey);
-
-            Long breakTime = MIRROR_GLASS_BREAK_TIME.get(sessionKey);
-            if (breakTime == null || now < breakTime) continue;
 
             ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
             if (player == null || !(player.getEntityWorld() instanceof ServerWorld dreamWorld)) continue;
 
-            List<BlockPos> glassBlocks = MIRROR_ROOM_GLASS.get(sessionKey);
-            if (glassBlocks == null || glassBlocks.isEmpty()) continue;
+            // ---- Разбивание стеклянной стены через 20 секунд после входа ----
+            Long breakTime = MIRROR_GLASS_BREAK_TIME.get(sessionKey);
+            if (breakTime != null && now >= breakTime) {
+                List<BlockPos> glassBlocks = MIRROR_ROOM_GLASS.get(sessionKey);
+                if (glassBlocks != null && !glassBlocks.isEmpty()) {
+                    // Разбиваем все стеклянные блоки
+                    for (BlockPos glassPos : glassBlocks) {
+                        dreamWorld.setBlockState(glassPos, net.minecraft.block.Blocks.AIR.getDefaultState());
 
-            // Разбиваем все стеклянные блоки
-            for (BlockPos glassPos : glassBlocks) {
-                dreamWorld.setBlockState(glassPos, net.minecraft.block.Blocks.AIR.getDefaultState());
+                        // Эффект разбивания стекла
+                        dreamWorld.spawnParticles(
+                            new net.minecraft.particle.BlockStateParticleEffect(
+                                net.minecraft.particle.ParticleTypes.BLOCK,
+                                net.minecraft.block.Blocks.GLASS.getDefaultState()
+                            ),
+                            glassPos.getX() + 0.5, glassPos.getY() + 0.5, glassPos.getZ() + 0.5,
+                            15, 0.3, 0.3, 0.3, 0.1
+                        );
+                    }
 
-                // Эффект разбивания стекла
-                dreamWorld.spawnParticles(
-                    new net.minecraft.particle.BlockStateParticleEffect(
-                        net.minecraft.particle.ParticleTypes.BLOCK,
-                        net.minecraft.block.Blocks.GLASS.getDefaultState()
-                    ),
-                    glassPos.getX() + 0.5, glassPos.getY() + 0.5, glassPos.getZ() + 0.5,
-                    15, 0.3, 0.3, 0.3, 0.1
-                );
+                    // Звук разбивающегося зеркала (кастомный)
+                    dreamWorld.playSound(null, glassBlocks.get(glassBlocks.size()/2),
+                        com.somnium.mod.registry.ModSounds.MIRROR_SHATTER,
+                        net.minecraft.sound.SoundCategory.BLOCKS,
+                        2.0f, 0.8f);
+                }
+
+                // Очищаем данные (один раз для всей группы)
+                MIRROR_ROOM_GLASS.remove(sessionKey);
+                MIRROR_GLASS_BREAK_TIME.remove(sessionKey);
             }
 
-            // Звук разбивающегося стекла
-            dreamWorld.playSound(null, glassBlocks.get(glassBlocks.size()/2),
-                net.minecraft.sound.SoundEvents.BLOCK_GLASS_BREAK,
-                net.minecraft.sound.SoundCategory.BLOCKS,
-                2.0f, 0.8f);
+            // ---- ДОБАВЛЕНО (выход из сна): зеркало выхода после победы над отражением ----
+            if (!MIRROR_ROOM_EXIT.containsKey(sessionKey)
+                    && active.bossTargetUuid() != null
+                    && isBossDefeated(player, active.bossTargetUuid())) {
+                BlockPos roomCorner = MIRROR_ROOM_CORNER.get(sessionKey);
+                if (roomCorner != null) {
+                    BlockPos exitCenter = buildMirrorRoomExit(dreamWorld, roomCorner);
+                    MIRROR_ROOM_EXIT.put(sessionKey, exitCenter);
+                    dreamWorld.playSound(null, exitCenter,
+                        com.somnium.mod.registry.ModSounds.EXIT_PORTAL,
+                        net.minecraft.sound.SoundCategory.AMBIENT, 1.6f, 1.0f);
 
-            // Очищаем данные (один раз для всей группы)
-            MIRROR_ROOM_GLASS.remove(sessionKey);
-            MIRROR_GLASS_BREAK_TIME.remove(sessionKey);
+                    // Подсказка всем участникам группы
+                    for (UUID memberId : new ArrayList<>(ACTIVE.keySet())) {
+                        ActiveDream memberActive = ACTIVE.get(memberId);
+                        if (memberActive == null || !memberActive.dreamId().equals(SomniumMod.id("mirror_room"))) continue;
+                        if (!sessionKey.equals(sessionKey(memberId))) continue;
+                        ServerPlayerEntity member = server.getPlayerManager().getPlayer(memberId);
+                        if (member != null) {
+                            showHint(member, "§fОтражение повержено! В стене открылось зеркало выхода — шагни в свет.", 9);
+                        }
+                    }
+                    SomniumMod.LOGGER.info("[Mirror Room] Отражение повержено — зеркало выхода открыто в {}", exitCenter.toShortString());
+                }
+            }
+
+            // Частицы у открытого зеркала выхода (свет, зовущий к себе)
+            BlockPos openExit = MIRROR_ROOM_EXIT.get(sessionKey);
+            if (openExit != null) {
+                long nextFx = MIRROR_ROOM_NEXT_EXIT_FX.getOrDefault(sessionKey, 0L);
+                if (now >= nextFx) {
+                    MIRROR_ROOM_NEXT_EXIT_FX.put(sessionKey, now + 10);
+                    dreamWorld.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                        openExit.getX() + 0.5, openExit.getY() + 1.2, openExit.getZ() + 0.5,
+                        6, 0.8, 0.9, 0.8, 0.01);
+                    dreamWorld.spawnParticles(net.minecraft.particle.ParticleTypes.REVERSE_PORTAL,
+                        openExit.getX() + 0.5, openExit.getY() + 1.2, openExit.getZ() + 0.5,
+                        10, 0.9, 1.0, 0.9, 0.02);
+                }
+            }
         }
+    }
+
+    /**
+     * ДОБАВЛЕНО (выход из "Зеркальной комнаты"): прорезает в западной стене комнаты
+     * (сторона игрока) проём 3×3 и строит за ним нишу из кварца, "глубина" которой
+     * светится морскими фонарями — зеркало выхода. Возвращает центр ниши: игрок,
+     * дошедший до неё, просыпается с исходом SURVIVED_OBJECTIVE.
+     */
+    private static BlockPos buildMirrorRoomExit(ServerWorld world, BlockPos roomCorner) {
+        net.minecraft.block.BlockState air = net.minecraft.block.Blocks.AIR.getDefaultState();
+        net.minecraft.block.BlockState quartz = net.minecraft.block.Blocks.QUARTZ_BLOCK.getDefaultState();
+        net.minecraft.block.BlockState smoothQuartz = net.minecraft.block.Blocks.SMOOTH_QUARTZ.getDefaultState();
+
+        int midZ = 15; // центр комнаты по Z (комната 30×30)
+
+        // Ниша за стеной: x от -4 до -1 снаружи комнаты, y от -1 до 3, ширина 5
+        for (int x = -4; x <= -1; x++) {
+            for (int y = -1; y <= 3; y++) {
+                for (int z = midZ - 2; z <= midZ + 2; z++) {
+                    BlockPos pos = roomCorner.add(x, y, z);
+                    boolean shell = (x == -4) || (y == -1) || (y == 3) || (z == midZ - 2) || (z == midZ + 2);
+                    world.setBlockState(pos, shell ? (y == -1 ? smoothQuartz : quartz) : air, 2);
+                }
+            }
+        }
+
+        // Проём 3×3 в западной стене (x=0)
+        for (int y = 0; y <= 2; y++) {
+            for (int z = midZ - 1; z <= midZ + 1; z++) {
+                world.setBlockState(roomCorner.add(0, y, z), air, 2);
+            }
+        }
+
+        // Светящаяся "глубина" зеркала — задняя стена ниши из морских фонарей
+        for (int y = 0; y <= 2; y++) {
+            for (int z = midZ - 1; z <= midZ + 1; z++) {
+                world.setBlockState(roomCorner.add(-4, y, z),
+                    net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState(), 2);
+            }
+        }
+
+        // Центр ниши — точка, до которой нужно дойти
+        return roomCorner.add(-2, 0, midZ);
     }
 
     /**
@@ -3390,7 +3673,16 @@ public final class DreamManager {
 
             long elapsed = now - active.enterTick();
 
-            // Притяжение на дно для ВСЕХ игроков в группе
+            // Позиция колокола собора (цель сна) — нужна и для тяги, и для проверки выхода
+            BlockPos bellPos = DROWNING_CITY_BELL_POS.get(sessionKey);
+
+            // Притяжение на дно для ВСЕХ игроков в группе.
+            // ИЗМЕНЕНО ("игрока не тянет на дно", "как залезть на башню"):
+            //  - тяга начинается раньше (8 секунд, а не 20) — глубина ощущается сразу;
+            //  - тянет только когда голова ПОД ВОДОЙ (isSubmergedInWater) — ходьба по
+            //    затопленным улицам по щиколотку не топит;
+            //  - ВНУТРИ шахты собора тяги НЕТ — иначе подняться по лестнице/пузырьковой
+            //    колонне к колоколу было бы физически невозможно.
             for (UUID memberId : new ArrayList<>(ACTIVE.keySet())) {
                 ActiveDream memberActive = ACTIVE.get(memberId);
                 if (memberActive == null || !memberActive.dreamId().equals(SomniumMod.id("drowning_city"))) continue;
@@ -3399,8 +3691,12 @@ public final class DreamManager {
                 ServerPlayerEntity member = server.getPlayerManager().getPlayer(memberId);
                 if (member == null) continue;
 
-                if (elapsed >= 400 && (member.isSubmergedInWater() || member.isTouchingWater())) {
-                    double secondsSincePull = (elapsed - 400) / 20.0;
+                boolean insideTower = bellPos != null
+                        && Math.abs(member.getBlockX() - bellPos.getX()) <= 5
+                        && Math.abs(member.getBlockZ() - bellPos.getZ()) <= 5;
+
+                if (elapsed >= 160 && !insideTower && member.isSubmergedInWater()) {
+                    double secondsSincePull = (elapsed - 160) / 20.0;
                     double pullStrength = Math.min(0.15 + secondsSincePull * 0.005, 0.35);
                     net.minecraft.util.math.Vec3d vel = member.getVelocity();
                     member.setVelocity(vel.x, vel.y - pullStrength, vel.z);
@@ -3413,6 +3709,90 @@ public final class DreamManager {
                         );
                     }
                 }
+            }
+
+            // ---- ДОБАВЛЕНО (выход из сна): колокол затопленного собора ----
+            if (bellPos != null) {
+                // Световой маяк над колокольней каждые 4 секунды — виден из любой точки города
+                long nextBeam = DROWNING_CITY_NEXT_BEAM.getOrDefault(sessionKey, 0L);
+                if (now >= nextBeam) {
+                    DROWNING_CITY_NEXT_BEAM.put(sessionKey, now + 80);
+                    for (int beamY = bellPos.getY() + 5; beamY <= bellPos.getY() + 28; beamY += 2) {
+                        dreamWorld.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                            bellPos.getX() + 0.5, beamY, bellPos.getZ() + 0.5,
+                            2, 0.15, 0.4, 0.15, 0.0);
+                    }
+                    dreamWorld.playSound(null, bellPos,
+                        net.minecraft.sound.SoundEvents.BLOCK_BELL_RESONATE,
+                        net.minecraft.sound.SoundCategory.AMBIENT, 2.0f, 1.2f);
+                }
+
+                // Игрок в воздушном кармане у колокола — цель выполнена, просыпается
+                for (UUID memberId : new ArrayList<>(ACTIVE.keySet())) {
+                    ActiveDream memberActive = ACTIVE.get(memberId);
+                    if (memberActive == null || !memberActive.dreamId().equals(SomniumMod.id("drowning_city"))) continue;
+                    if (!sessionKey.equals(sessionKey(memberId))) continue;
+
+                    ServerPlayerEntity member = server.getPlayerManager().getPlayer(memberId);
+                    if (member == null) continue;
+
+                    double bdx = member.getX() - (bellPos.getX() + 0.5);
+                    double bdz = member.getZ() - (bellPos.getZ() + 0.5);
+                    double bdy = member.getY() - bellPos.getY();
+                    if (bdx * bdx + bdz * bdz <= 12.25 && bdy >= -1.0 && bdy <= 4.0) {
+                        dreamWorld.playSound(null, bellPos,
+                            net.minecraft.sound.SoundEvents.BLOCK_BELL_USE,
+                            net.minecraft.sound.SoundCategory.PLAYERS, 2.0f, 1.0f);
+                        member.playSound(com.somnium.mod.registry.ModSounds.EXIT_PORTAL, 1.0f, 1.0f);
+                        dreamWorld.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
+                            member.getX(), member.getY() + 1.0, member.getZ(),
+                            40, 0.6, 1.0, 0.6, 0.05);
+                        SomniumMod.LOGGER.info("[Drowning City] Игрок {} добрался до колокола собора — выход из сна",
+                            member.getName().getString());
+                        wake(member, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
+                    }
+                }
+            }
+
+            // ---- ДОБАВЛЕНО ("сон не сбрасывается"): осушка воды прошлого захода ----
+            // Заливка из прошлой сессии остаётся в мире навсегда — без осушки повторный
+            // заход начинался бы в уже затопленном городе. Осушаем снизу вверх батчами
+            // (как и заливку), чтобы игрок у спавна получил воздух в первые секунды.
+            Integer drainLevel = DROWNING_CITY_DRAIN_LEVEL.get(sessionKey);
+            if (drainLevel != null) {
+                java.util.ArrayDeque<BlockPos> drainQueue =
+                        DROWNING_CITY_DRAIN_QUEUE.computeIfAbsent(sessionKey, k -> new java.util.ArrayDeque<>());
+                if (drainQueue.isEmpty()) {
+                    if (drainLevel > DROWNING_CITY_MAX_Y) {
+                        // Осушка завершена
+                        DROWNING_CITY_DRAIN_LEVEL.remove(sessionKey);
+                        DROWNING_CITY_DRAIN_QUEUE.remove(sessionKey);
+                        SomniumMod.LOGGER.info("[Drowning City] Осушка воды прошлого захода завершена");
+                    } else {
+                        // Собираем очередной слой в очередь (центр мира, радиус как у заливки)
+                        int radius = 160;
+                        BlockPos.Mutable scanPos = new BlockPos.Mutable();
+                        for (int x = -radius; x <= radius; x++) {
+                            for (int z = -radius; z <= radius; z++) {
+                                scanPos.set(x, drainLevel, z);
+                                if (dreamWorld.getBlockState(scanPos).getBlock() == net.minecraft.block.Blocks.WATER) {
+                                    drainQueue.add(scanPos.toImmutable());
+                                }
+                            }
+                        }
+                        DROWNING_CITY_DRAIN_LEVEL.put(sessionKey, drainLevel + 1);
+                    }
+                }
+                int drained = 0;
+                while (drained < DROWNING_CITY_FILL_BATCH && !drainQueue.isEmpty()) {
+                    BlockPos drainPos = drainQueue.poll();
+                    if (dreamWorld.getBlockState(drainPos).getBlock() == net.minecraft.block.Blocks.WATER) {
+                        dreamWorld.setBlockState(drainPos, net.minecraft.block.Blocks.AIR.getDefaultState(),
+                                net.minecraft.block.Block.NOTIFY_LISTENERS);
+                        drained++;
+                    }
+                }
+                continue; // во время осушки новую заливку не планируем
             }
 
             java.util.ArrayDeque<BlockPos> queue =
@@ -3431,13 +3811,14 @@ public final class DreamManager {
                     int newLevel = currentLevel + 1;
                     DROWNING_CITY_WATER_LEVEL.put(sessionKey, newLevel);
 
-                    // Сканируем слой и ставим позиции в очередь
-                    enqueueWaterLayer(dreamWorld, player.getBlockPos(), newLevel, queue);
+                    // Сканируем слой и ставим позиции в очередь (минуя воздушный карман колокольни)
+                    enqueueWaterLayer(dreamWorld, player.getBlockPos(), newLevel, queue,
+                            DROWNING_CITY_AIR_POCKET.get(sessionKey));
 
-                    // Звук воды каждые 5 уровней
+                    // Звук воды каждые 5 уровней (кастомный — наступающий потоп)
                     if (newLevel % 5 == 0) {
                         dreamWorld.playSound(null, player.getBlockPos(),
-                            net.minecraft.sound.SoundEvents.AMBIENT_UNDERWATER_ENTER,
+                            com.somnium.mod.registry.ModSounds.WATER_RISE,
                             net.minecraft.sound.SoundCategory.AMBIENT,
                             1.5f, 0.8f);
                     }
@@ -3475,16 +3856,146 @@ public final class DreamManager {
      * Собирает в очередь все воздушные позиции слоя Y в радиусе 160 блоков (10 чанков)
      * вокруг игрока — сама заливка выполняется батчами в tickDrowningCityWater().
      */
-    private static void enqueueWaterLayer(ServerWorld world, BlockPos center, int y, java.util.ArrayDeque<BlockPos> queue) {
+    private static void enqueueWaterLayer(ServerWorld world, BlockPos center, int y,
+                                          java.util.ArrayDeque<BlockPos> queue,
+                                          java.util.Set<BlockPos> airPocket) {
         int radius = 160; // 10 чанков = 10 * 16 = 160 блоков
         for (int x = -radius; x <= radius; x++) {
             for (int z = -radius; z <= radius; z++) {
                 BlockPos pos = new BlockPos(center.getX() + x, y, center.getZ() + z);
+                // Воздушный карман колокольни НЕ заливаем — иначе цель сна утонула бы
+                if (airPocket != null && airPocket.contains(pos)) continue;
                 if (world.getBlockState(pos).isAir()) {
                     queue.add(pos);
                 }
             }
         }
+    }
+
+    /**
+     * ДОБАВЛЕНО (выход из "Тонущего города"): строит затопленный собор с колокольней
+     * в 36-44 блоках от спавна. Конструкция:
+     *  - башня 9×9 из каменного кирпича (с трещинами/мхом и прорехами — руина), от
+     *    поверхности песка (Y=7) до Y=85;
+     *  - внутри полая шахта 7×7 — она затапливается вместе с городом, по ней нужно
+     *    доплыть до верха (притяжение глубины мешает, в этом и челлендж);
+     *  - на Y=80 (максимальный уровень воды) — сплошной пол, выше него сухая
+     *    колокольня с воздушным карманом (позиции кармана защищены от заливки,
+     *    см. DROWNING_CITY_AIR_POCKET и enqueueWaterLayer);
+     *  - в центре колокольни — КОЛОКОЛ: игрок, добравшийся до него, просыпается
+     *    с исходом SURVIVED_OBJECTIVE (проверка в tickDrowningCityWater);
+     *  - вход — арка 3×3 в стене со стороны спавна на уровне воды;
+     *  - над колокольней периодически поднимается луч из частиц END_ROD (маяк-направление).
+     */
+    private static void setupDrowningCityCathedral(ServerWorld world, BlockPos spawnPos, UUID sessionKey) {
+        double angle = RANDOM.nextDouble() * Math.PI * 2;
+        int dist = 36 + RANDOM.nextInt(9);
+        int cx = spawnPos.getX() + (int) Math.round(Math.cos(angle) * dist);
+        int cz = spawnPos.getZ() + (int) Math.round(Math.sin(angle) * dist);
+
+        int baseY = DROWNING_CITY_START_Y;            // Y=7 — поверхность песка
+        int chamberFloorY = DROWNING_CITY_MAX_Y;      // Y=80 — пол колокольни
+        int wallTopY = chamberFloorY + 5;             // Y=85 — потолок колокольни
+
+        java.util.Set<BlockPos> pocket = new java.util.HashSet<>();
+        BlockPos.Mutable p = new BlockPos.Mutable();
+
+        for (int dx = -4; dx <= 4; dx++) {
+            for (int dz = -4; dz <= 4; dz++) {
+                boolean wall = Math.abs(dx) == 4 || Math.abs(dz) == 4;
+                for (int y = baseY; y <= wallTopY; y++) {
+                    p.set(cx + dx, y, cz + dz);
+                    if (wall) {
+                        // Прорехи в стенах шахты (руина) — но не у самого дна и не у колокольни
+                        if (y > baseY + 2 && y < chamberFloorY - 2 && RANDOM.nextInt(100) < 6) continue;
+                        int roll = RANDOM.nextInt(100);
+                        net.minecraft.block.BlockState state = roll < 55
+                            ? net.minecraft.block.Blocks.STONE_BRICKS.getDefaultState()
+                            : roll < 75
+                                ? net.minecraft.block.Blocks.CRACKED_STONE_BRICKS.getDefaultState()
+                                : roll < 95
+                                    ? net.minecraft.block.Blocks.MOSSY_STONE_BRICKS.getDefaultState()
+                                    : net.minecraft.block.Blocks.PRISMARINE.getDefaultState();
+                        world.setBlockState(p, state, 2);
+                    } else if (y == chamberFloorY || y == wallTopY) {
+                        // Пол и потолок колокольни — сплошные (карман герметичен сверху и снизу)
+                        world.setBlockState(p, net.minecraft.block.Blocks.STONE_BRICKS.getDefaultState(), 2);
+                    } else if (y > chamberFloorY) {
+                        // Внутренность колокольни — защищённый от заливки воздушный карман
+                        pocket.add(p.toImmutable());
+                    }
+                    // Шахта ниже пола колокольни остаётся воздухом — она затопится.
+                }
+            }
+        }
+
+        // Морские фонари по углам колокольни (свет виден сквозь толщу воды)
+        for (int[] corner : new int[][]{{-3, -3}, {-3, 3}, {3, -3}, {3, 3}}) {
+            BlockPos lamp = new BlockPos(cx + corner[0], chamberFloorY + 1, cz + corner[1]);
+            world.setBlockState(lamp, net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState(), 2);
+            pocket.remove(lamp);
+        }
+
+        // Колокол в центре колокольни — цель сна
+        BlockPos bellPos = new BlockPos(cx, chamberFloorY + 1, cz);
+        world.setBlockState(bellPos, net.minecraft.block.Blocks.BELL.getDefaultState()
+            .with(net.minecraft.block.BellBlock.ATTACHMENT, net.minecraft.block.enums.Attachment.FLOOR), 2);
+        pocket.remove(bellPos);
+
+        // Входная арка 3×3 в стене со стороны спавна (на уровне воды, чтобы вплавь)
+        int offX = spawnPos.getX() - cx;
+        int offZ = spawnPos.getZ() - cz;
+        net.minecraft.block.BlockState air = net.minecraft.block.Blocks.AIR.getDefaultState();
+        if (Math.abs(offX) >= Math.abs(offZ)) {
+            int wx = cx + 4 * Integer.signum(offX == 0 ? 1 : offX);
+            for (int dz = -1; dz <= 1; dz++) {
+                for (int y = baseY; y <= baseY + 2; y++) {
+                    world.setBlockState(new BlockPos(wx, y, cz + dz), air, 2);
+                }
+            }
+        } else {
+            int wz = cz + 4 * Integer.signum(offZ);
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int y = baseY; y <= baseY + 2; y++) {
+                    world.setBlockState(new BlockPos(cx + dx, y, wz), air, 2);
+                }
+            }
+        }
+
+        // ДОБАВЛЕНО ("как залезть на башню — паркур хз"): два независимых способа подняться.
+        //
+        // 1) ВИНТОВАЯ ЛЕСТНИЦА: сплошная спираль из плит вдоль внутренних стен шахты
+        //    от самого дна до пола колокольни. Шаг — 1 блок (поднимаешься без прыжков),
+        //    БЕЗ пропусков — никакого паркура. Позиции спирали — периметр внутренней
+        //    шахты 7×7 (24 позиции на виток), на каждый Y — следующая позиция кольца.
+        java.util.List<int[]> ring = new java.util.ArrayList<>();
+        for (int i = -3; i <= 3; i++) ring.add(new int[]{i, -3});
+        for (int i = -2; i <= 3; i++) ring.add(new int[]{3, i});
+        for (int i = 2; i >= -3; i--) ring.add(new int[]{i, 3});
+        for (int i = 2; i >= -2; i--) ring.add(new int[]{-3, i});
+        for (int y = baseY; y < chamberFloorY; y++) {
+            int[] step = ring.get((y - baseY) % ring.size());
+            int roll = RANDOM.nextInt(100);
+            net.minecraft.block.BlockState slab = (roll < 70
+                    ? net.minecraft.block.Blocks.STONE_BRICK_SLAB
+                    : net.minecraft.block.Blocks.MOSSY_STONE_BRICK_SLAB).getDefaultState();
+            world.setBlockState(new BlockPos(cx + step[0], y, cz + step[1]), slab, 2);
+        }
+        //
+        // 2) ПУЗЫРЬКОВАЯ КОЛОННА: дно шахты выложено песком душ — когда вода зальёт
+        //    шахту, колонна САМА выстрелит игрока наверх (подпёртая лестницей: пузыри
+        //    не тянут вниз на магме, только вверх).
+        for (int dx = -3; dx <= 3; dx++) {
+            for (int dz = -3; dz <= 3; dz++) {
+                world.setBlockState(new BlockPos(cx + dx, baseY - 1, cz + dz),
+                        net.minecraft.block.Blocks.SOUL_SAND.getDefaultState(), 2);
+            }
+        }
+
+        DROWNING_CITY_BELL_POS.put(sessionKey, bellPos);
+        DROWNING_CITY_AIR_POCKET.put(sessionKey, pocket);
+        SomniumMod.LOGGER.info("[Drowning City] Собор с колоколом построен: центр ({}, {}), колокол {}",
+            cx, cz, bellPos.toShortString());
     }
 
     /**
@@ -4137,9 +4648,8 @@ public final class DreamManager {
             ServerPlayerEntity player = world.getServer().getPlayerManager()
                     .getPlayer(sessionKey);
             if (player != null) {
-                player.sendMessage(net.minecraft.text.Text.literal(
-                        "§6Первое блюдо. Свежее — съешь. Порченое (зелёное имя и дым) — возьми в левую руку, зажигалку в правую, ПКМ — сожги."),
-                        true);
+                // ИЗМЕНЕНО ("текст быстро пропадает"): инструкция висит 10 секунд
+                showHint(player, "§6Свежее блюдо — съешь. Порченое (зелёное имя и дым) — возьми в левую руку, зажигалку в правую, ПКМ — сожги.", 10);
             }
         }
     }
@@ -4172,9 +4682,23 @@ public final class DreamManager {
 
         ServerPlayerEntity player = world.getServer().getPlayerManager().getPlayer(sessionKey);
         if (player != null) {
-            player.sendMessage(net.minecraft.text.Text.literal(
-                    "§6Пир окончен. Возьми Кубок Тоста со стола — и выпей его до дна (зажми ПКМ), чтобы проснуться."),
-                    true);
+            showHint(player, "§6Пир окончен. Возьми Кубок Тоста со стола — и выпей его до дна (зажми ПКМ), чтобы проснуться.", 10);
+        }
+
+        // ДОБАВЛЕНО ("Мясной Голем стоит на выходе и охраняет его"): последнее испытание пира —
+        // за кубком приходит вышибала. Он медленный, но бьёт по площади — придётся
+        // обегать его или отвлекать, пока допиваешь кубок.
+        var golem = com.somnium.mod.registry.ModEntities.FLESH_GOLEM.create(world);
+        if (golem != null) {
+            golem.refreshPositionAndAngles(
+                    plate.getX() + 2.5, plate.getY() + 1.0, plate.getZ() + 2.5, 0.0f, 0.0f);
+            golem.setPersistent();
+            world.spawnEntity(golem);
+            world.playSound(null, plate, net.minecraft.sound.SoundEvents.ENTITY_RAVAGER_ROAR,
+                    net.minecraft.sound.SoundCategory.HOSTILE, 1.0f, 0.5f);
+            if (player != null) {
+                showHint(player, "§4Мясной Голем охраняет Кубок Тоста! Осторожно: он бьёт по площади.", 8);
+            }
         }
     }
 
@@ -4696,7 +5220,14 @@ public final class DreamManager {
 
                 // Показываем новое тревожное сообщение каждые 5 секунд (100 тиков)
                 long timeSinceSigns = now - DREAM_WITHIN_DREAM_SIGN_START.get(playerId);
-                if (timeSinceSigns % 100 == 0) {
+                if (timeSinceSigns > 0 && timeSinceSigns % 600 == 0) {
+                    // ДОБАВЛЕНО (выход из сна): раз в 30 секунд — едва заметная "трещина" в
+                    // кошмаре. Единственная НЕ красная подсказка указывает настоящий выход:
+                    // чтобы проснуться из сна-в-сне, нужно УСНУТЬ В НЁМ (ПКМ по своей кровати —
+                    // обработка в UseBlockCallback в SomniumMod). Красные надписи ("ПРЫГНИ" и т.п.)
+                    // — ложь кошмара, ведущая к гибели.
+                    showHint(player, "§8Кровать всё ещё стоит там, где ты уснул...", 8);
+                } else if (timeSinceSigns % 100 == 0) {
                     showDisturbingMessage(player);
                 }
             }

@@ -21,5 +21,14 @@
   "somnium.dream.mirror_room": "Mirror Room",
   "somnium.dream.void_of_eyes": "Void of Eyes",
   "somnium.dream.drowning_city": "Drowning City",
-  "somnium.dream.dream_within_dream": "Dream Within a Dream"
+  "somnium.dream.dream_within_dream": "Dream Within a Dream",
+  "subtitles.somnium.dream_enter": "Entering a dream",
+  "subtitles.somnium.dream_wake": "Waking up",
+  "subtitles.somnium.dread_ambience": "Dream's dreadful hum",
+  "subtitles.somnium.whisper_ambient": "Whispering behind",
+  "subtitles.somnium.rupture_stinger": "Nightmare breaks through",
+  "subtitles.somnium.miner_scream": "Miner's scream",
+  "subtitles.somnium.exit_portal": "Dream exit opens",
+  "subtitles.somnium.water_rise": "Water rises",
+  "subtitles.somnium.mirror_shatter": "Mirror shatters"
 }

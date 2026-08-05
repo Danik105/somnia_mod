@@ -129,6 +129,8 @@ public final class SomniumMod implements ModInitializer {
 
         // 17.3 ДОБАВЛЕНО ("портал в мир снов"): стояние в портале 4 сек = телепорт
         ServerTickEvents.END_SERVER_TICK.register(com.somnium.mod.dream.DreamManager::tickDreamPortal);
+        // 17.4 Долгие подсказки в экшенбаре (держатся 8-9 секунд)
+        ServerTickEvents.END_SERVER_TICK.register(com.somnium.mod.dream.DreamManager::tickHints);
 
         // 17.4 ДОБАВЛЕНО ("портал в мир снов"): поджог рамки из блоков сноведений
         // зажигалкой — как рамка из обсидиана для ада. Ставим наш обработчик так, чтобы
@@ -192,6 +194,14 @@ public final class SomniumMod implements ModInitializer {
             net.minecraft.block.BlockState state = world.getBlockState(pos);
 
             if (state.getBlock() instanceof net.minecraft.block.BellBlock) {
+                // ИСПРАВЛЕНО (конфликт с выходом из "Тонущего города"): колокол собора
+                // в измерении сна — это ЦЕЛЬ сна (выход с исходом SURVIVED_OBJECTIVE через
+                // близость, см. tickDrowningCityWater), а не "будильник" для спящих снаружи.
+                // Без этого исключения клик по колоколу будил бы самого кликнувшего с
+                // худшим исходом WOKE_EARLY (он находится в радиусе 5 блоков и сам спит).
+                if (com.somnium.mod.dimension.ModDimensions.isDreamDimension(serverWorld.getRegistryKey())) {
+                    return net.minecraft.util.ActionResult.PASS;
+                }
                 // Звонящий сам во сне — разрешаем (в измерениях снов колоколов нет, но комментируем)
                 // Если бы колокола были в снах, можно было бы добавить проверку:
                 // if (com.somnium.mod.dream.DreamManager.isDreaming(player.getUuid())) return ActionResult.PASS;
@@ -218,6 +228,36 @@ public final class SomniumMod implements ModInitializer {
                 return com.somnium.mod.dream.DreamManager.onFeastEntityUse(serverPlayer, hand, entity);
             }
             return net.minecraft.util.ActionResult.PASS;
+        });
+
+        // 24. ДОБАВЛЕНО (выход из сна "Сон-в-сне"): чтобы проснуться из сна-в-сне, нужно
+        // УСНУТЬ В НЁМ — ПКМ по своей кровати в скопированном мире. Во ВСЕХ измерениях снов
+        // bed_works=false (см. data/somnium/dimension_type), поэтому без этого перехвата
+        // кровать просто ВЗОРВАЛАСЬ бы, как в Незере. Перехватываем клик раньше ванили.
+        net.fabricmc.fabric.api.event.player.UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
+            if (world.isClient()) {
+                return net.minecraft.util.ActionResult.PASS;
+            }
+            if (!(world.getBlockState(hitResult.getBlockPos()).getBlock() instanceof net.minecraft.block.BedBlock)) {
+                return net.minecraft.util.ActionResult.PASS;
+            }
+            if (!com.somnium.mod.dimension.ModDimensions.isDreamDimension(world.getRegistryKey())) {
+                return net.minecraft.util.ActionResult.PASS;
+            }
+            // Измерение сна: ванильную обработку клика глушим всегда (иначе взрыв)
+            if (world.getRegistryKey().equals(com.somnium.mod.dimension.ModDimensions.DREAM_WITHIN_DREAM)
+                    && player instanceof net.minecraft.server.network.ServerPlayerEntity serverPlayer
+                    && com.somnium.mod.dream.DreamManager.isDreaming(serverPlayer.getUuid())) {
+                serverPlayer.playSound(com.somnium.mod.registry.ModSounds.DREAM_WAKE, 1.0f, 1.0f);
+                com.somnium.mod.dream.DreamManager.wake(serverPlayer,
+                    com.somnium.mod.sanity.SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
+                return net.minecraft.util.ActionResult.SUCCESS;
+            }
+            if (player instanceof net.minecraft.server.network.ServerPlayerEntity serverPlayer2
+                    && com.somnium.mod.dream.DreamManager.isDreaming(serverPlayer2.getUuid())) {
+                com.somnium.mod.dream.DreamManager.showHint(serverPlayer2, "§7Кровати во снах не работают...", 5);
+            }
+            return net.minecraft.util.ActionResult.SUCCESS;
         });
 
         LOGGER.info("[Somnium] Инициализация завершена. Сладких снов.");

@@ -107,14 +107,16 @@ public final class DreamRegistry {
     private static List<DreamType> jsonDefaults() {
         List<DreamType> list = new ArrayList<>();
 
-        // ИЗМЕНЕНО: Тонущий город - оставлена дверь (воздушный карман логичен как цель)
+        // ИЗМЕНЕНО (выход из сна): вместо безликой "двери пробуждения" — колокол на вершине
+        // затопленного собора (строится в setupDrowningCityCathedral, проверка близости —
+        // в tickDrowningCityWater). objectiveType убран, чтобы не спавнился старый маркер двери.
         list.add(new DreamType(
                 SomniumMod.id("drowning_city"), "somnium.dream.drowning_city",
                 "somnium:drowning_city_ruins",
                 List.of(SomniumMod.id("drowned_wretch"), SomniumMod.id("phantom_eel")),
                 20, 100f, 6000L,
-                "Найти воздушный карман на крыше собора до того, как вода поднимется до верха.",
-                DreamObjectiveType.REACH_DOOR, null, 0
+                "Доберись до колокола на вершине затопленного собора, пока вода не поглотила город.",
+                null, null, 0
         ));
 
         // ИЗМЕНЕНО: Лес теней - ведьмины огни ведут к Дереву-Маяку; выход — канал в его свете
