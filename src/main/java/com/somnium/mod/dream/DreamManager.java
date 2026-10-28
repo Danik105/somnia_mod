@@ -595,13 +595,28 @@ public final class DreamManager {
                 && content.getKey().equals("somnium.dream.sleeping_body");
     }
 
+    /**
+     * Удаление сущности может синхронно вызвать загрузку другой (и снова onEntityLoad),
+     * поэтому проходим по снимку очереди: всё, что добавится во время прохода, уйдёт в следующий тик.
+     */
     private static void flushDiscards() {
         if (PENDING_DISCARD.isEmpty()) return;
-        for (Entity entity : PENDING_DISCARD) {
-            if (!entity.isRemoved()) entity.discard();
-        }
+        List<Entity> batch = new ArrayList<>(PENDING_DISCARD);
         PENDING_DISCARD.clear();
+        Set<String> types = new HashSet<>();
+        for (Entity entity : batch) {
+            if (entity.isRemoved()) continue;
+            types.add(net.minecraft.registry.Registries.ENTITY_TYPE.getId(entity.getType()) + " @ "
+                    + entity.getWorld().getRegistryKey().getValue());
+            entity.discard();
+        }
+        if (!types.isEmpty() && discardReports < 5) {
+            discardReports++;
+            SomniumMod.LOGGER.info("[Somnium] Удалены посторонние сущности ({}): {}", batch.size(), types);
+        }
     }
+
+    private static int discardReports = 0;
 
     // =====================================================================
     // Тело в кровати и защита кровати
