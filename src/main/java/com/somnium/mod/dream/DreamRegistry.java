@@ -1,207 +1,131 @@
 package com.somnium.mod.dream;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
+import com.google.gson.JsonObject;
 import com.somnium.mod.SomniumMod;
+import com.somnium.mod.dream.scenario.DreamScenarios;
+import net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.resource.Resource;
+import net.minecraft.resource.ResourceManager;
 import net.minecraft.util.Identifier;
+import net.minecraft.util.JsonHelper;
+import org.jetbrains.annotations.Nullable;
 
+import java.io.Reader;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
-import java.util.Set;
 
 /**
- * Реестр всех типов снов. Данные грузятся из data/somnium/dream/*.json через
- * стандартный Fabric SimpleResourceReloadListener (регистрация — см. bootstrap()).
- *
- * Сейчас здесь заглушка со статической регистрацией 6 базовых снов "в коде",
- * чтобы каркас был рабочим сразу. В реальной сборке нужно заменить jsonDefaults()
- * на настоящую загрузку через ResourceManager (см. TODO ниже) — тогда сны будут
- * полностью дата-драйвенными и редактируемыми без пересборки мода.
+ * Реестр типов снов, загружаемый из датапака: data/&lt;namespace&gt;/dream/&lt;name&gt;.json.
+ * Перезагружается командой /reload. Неверные файлы пропускаются с предупреждением в лог.
  */
 public final class DreamRegistry {
 
-    private static final Map<Identifier, DreamType> DREAMS = new LinkedHashMap<>();
+    private static volatile Map<Identifier, DreamType> dreams = Collections.emptyMap();
     private static final Random RANDOM = new Random();
 
     private DreamRegistry() {}
 
-    public static void bootstrap() {
-        DREAMS.clear();
-        for (DreamType dream : jsonDefaults()) {
-            DREAMS.put(dream.id(), dream);
-        }
-        SomniumMod.LOGGER.info("[Somnium] Загружено {} типов снов", DREAMS.size());
-
-        // TODO: заменить статическую загрузку на:
-        // ResourceManagerHelper.get(ResourceType.SERVER_DATA).registerReloadListener(new DreamReloadListener());
-        // чтобы читать data/somnium/dream/*.json как обычные датапак-ресурсы.
-    }
-
+    @Nullable
     public static DreamType get(Identifier id) {
-        return DREAMS.get(id);
+        return dreams.get(id);
     }
 
-    public static Map<Identifier, DreamType> all() {
-        return DREAMS;
+    public static Collection<DreamType> all() {
+        return dreams.values();
+    }
+
+    public static boolean isEmpty() {
+        return dreams.isEmpty();
     }
 
     /**
-     * Взвешенный выбор следующего сна. Учитывает текущий рассудок игрока —
-     * некоторые "тяжёлые" сны (например, Кошмар-босс) доступны только при низком рассудке.
+     * Взвешенный случайный выбор сна, доступного при текущем рассудке, без повторов
+     * недавних снов. Если подходящих нет — сначала без учёта истории, потом любой.
      */
-    public static DreamType pickWeighted(float currentSanity, Identifier avoidRepeatOf) {
+    @Nullable
+    public static DreamType pick(float sanity, List<Identifier> recent) {
         List<DreamType> pool = new ArrayList<>();
-        int totalWeight = 0;
-        for (DreamType dream : DREAMS.values()) {
-            if (currentSanity > dream.minSanityToAppear()) continue;
-            if (dream.id().equals(avoidRepeatOf) && DREAMS.size() > 1) continue;
-            pool.add(dream);
-            totalWeight += dream.baseWeight();
+        for (DreamType dream : dreams.values()) {
+            if (sanity <= dream.maxSanity() && !recent.contains(dream.id())) pool.add(dream);
         }
         if (pool.isEmpty()) {
-            pool.addAll(DREAMS.values());
-            totalWeight = pool.stream().mapToInt(DreamType::baseWeight).sum();
+            for (DreamType dream : dreams.values()) {
+                if (sanity <= dream.maxSanity()) pool.add(dream);
+            }
         }
-        int roll = RANDOM.nextInt(Math.max(1, totalWeight));
-        int cursor = 0;
+        if (pool.isEmpty()) pool.addAll(dreams.values());
+        if (pool.isEmpty()) return null;
+
+        int total = 0;
+        for (DreamType dream : pool) total += Math.max(1, dream.weight());
+        int roll = RANDOM.nextInt(total);
         for (DreamType dream : pool) {
-            cursor += dream.baseWeight();
-            if (roll < cursor) return dream;
+            roll -= Math.max(1, dream.weight());
+            if (roll < 0) return dream;
         }
         return pool.get(pool.size() - 1);
     }
 
-    public static DreamType pickSharedWeighted(float currentSanity, Identifier avoidRepeatOf) {
-        return pickWeighted(currentSanity, avoidRepeatOf);
-    }
+    public static final class Loader implements SimpleSynchronousResourceReloadListener {
 
-    /**
-     * ДОБАВЛЕНО: выбор сна с избеганием последних N снов из истории игрока.
-     * Используется новой системой SharedDreamSession для предотвращения повторений.
-     */
-    public static DreamType pickWeightedAvoidingHistory(float currentSanity, List<Identifier> recentHistory) {
-        List<DreamType> pool = new ArrayList<>();
-        int totalWeight = 0;
-        for (DreamType dream : DREAMS.values()) {
-            if (currentSanity > dream.minSanityToAppear()) continue;
-            if (recentHistory.contains(dream.id())) continue; // Избегаем недавних снов
-            pool.add(dream);
-            totalWeight += dream.baseWeight();
+        @Override
+        public Identifier getFabricId() {
+            return SomniumMod.id("dreams");
         }
-        if (pool.isEmpty()) {
-            // Если все сны были недавно - берём любой доступный
-            pool.addAll(DREAMS.values());
-            totalWeight = pool.stream().mapToInt(DreamType::baseWeight).sum();
+
+        @Override
+        public void reload(ResourceManager manager) {
+            Map<Identifier, DreamType> loaded = new LinkedHashMap<>();
+            Map<Identifier, Resource> files = manager.findResources("dream", id -> id.getPath().endsWith(".json"));
+            for (Map.Entry<Identifier, Resource> entry : files.entrySet()) {
+                Identifier file = entry.getKey();
+                String path = file.getPath();
+                Identifier dreamId = new Identifier(file.getNamespace(),
+                        path.substring("dream/".length(), path.length() - ".json".length()));
+                try (Reader reader = entry.getValue().getReader()) {
+                    DreamType type = parse(dreamId, JsonHelper.deserialize(reader));
+                    if (type != null) loaded.put(dreamId, type);
+                } catch (Exception e) {
+                    SomniumMod.LOGGER.error("[Somnium] Не удалось прочитать сон {}: {}", file, e.getMessage());
+                }
+            }
+            dreams = Collections.unmodifiableMap(loaded);
+            SomniumMod.LOGGER.info("[Somnium] Загружено снов: {}", loaded.size());
         }
-        int roll = RANDOM.nextInt(Math.max(1, totalWeight));
-        int cursor = 0;
-        for (DreamType dream : pool) {
-            cursor += dream.baseWeight();
-            if (roll < cursor) return dream;
+
+        @Nullable
+        private static DreamType parse(Identifier id, JsonObject json) {
+            Identifier scenario = new Identifier(JsonHelper.getString(json, "scenario", id.toString()));
+            if (!DreamScenarios.exists(scenario)) {
+                SomniumMod.LOGGER.warn("[Somnium] Сон {} ссылается на неизвестный сценарий {} — пропущен", id, scenario);
+                return null;
+            }
+            Identifier dimension = new Identifier(JsonHelper.getString(json, "dimension"));
+            List<Identifier> monsters = new ArrayList<>();
+            JsonArray array = JsonHelper.getArray(json, "monsters", new JsonArray());
+            for (JsonElement element : array) {
+                monsters.add(new Identifier(element.getAsString()));
+            }
+            String base = "somnium.dream." + id.getPath();
+            return new DreamType(
+                    id,
+                    JsonHelper.getString(json, "name", base),
+                    JsonHelper.getString(json, "objective", base + ".objective"),
+                    RegistryKey.of(RegistryKeys.WORLD, dimension),
+                    scenario,
+                    List.copyOf(monsters),
+                    JsonHelper.getInt(json, "weight", 10),
+                    JsonHelper.getFloat(json, "max_sanity", 100.0f),
+                    Math.max(200, JsonHelper.getInt(json, "duration_ticks", 6000)));
         }
-        return pool.get(pool.size() - 1);
-    }
-
-    /** Базовые 6 снов "зашитые" в код — см. соответствующие JSON в data/somnium/dream/ как эталон формата. */
-    private static List<DreamType> jsonDefaults() {
-        List<DreamType> list = new ArrayList<>();
-
-        // ИЗМЕНЕНО (выход из сна): вместо безликой "двери пробуждения" — колокол на вершине
-        // затопленного собора (строится в setupDrowningCityCathedral, проверка близости —
-        // в tickDrowningCityWater). objectiveType убран, чтобы не спавнился старый маркер двери.
-        list.add(new DreamType(
-                SomniumMod.id("drowning_city"), "somnium.dream.drowning_city",
-                "somnium:drowning_city_ruins",
-                List.of(SomniumMod.id("drowned_wretch"), SomniumMod.id("phantom_eel")),
-                20, 100f, 6000L,
-                "Доберись до колокола на вершине затопленного собора, пока вода не поглотила город.",
-                null, null, 0
-        ));
-
-        // ИЗМЕНЕНО: Лес теней - ведьмины огни ведут к Дереву-Маяку; выход — канал в его свете
-        list.add(new DreamType(
-                SomniumMod.id("shadow_forest"), "somnium.dream.shadow_forest",
-                "somnium:shadow_forest_procedural",
-                List.of(SomniumMod.id("lurking_shade")),
-                20, 100f, 7200L,
-                "Иди на ведьмины огни к Дереву-Маяку и встань в его свет — дерево заберёт тебя из сна. Шёпот зовёт обернуться — не смотри: тень ждёт твоего взгляда.",
-                DreamObjectiveType.REACH_DOOR, null, 0
-        ));
-
-        // ИЗМЕНЕНО: Пустошь зеркал, редизайн "Поймай своё отражение" — без босса:
-        // коснись убегающего зеркала 3 раза, пока Двойник идёт по твоему следу
-        list.add(new DreamType(
-                SomniumMod.id("mirror_wastes"), "somnium.dream.mirror_wastes",
-                "somnium:mirror_wastes_procedural",
-                List.of(), // монстров нет: Двойника спавнит тик сна, свипер страхует от случайных
-                18, 100f, 6600L,
-                "Поймай своё отражение. Через полминуты в пустоши появится зеркало — коснись его 3 раза, а оно будет исчезать и блестеть в новых местах. Двойник идёт за тобой по пятам и ускоряется после каждого касания — не дай ему схватить тебя.",
-                null, null, 0 // выход через 3 касания зеркала (своя механика), не через дверь
-        ));
-
-        // ИЗМЕНЕНО: Шахта - процедурный лабиринт; стены за спиной обрушаются и зарастают
-        list.add(new DreamType(
-                SomniumMod.id("collapsing_mine"), "somnium.dream.collapsing_mine",
-                "somnium:collapsing_mine_procedural",
-                List.of(SomniumMod.id("screaming_miner"), SomniumMod.id("blind_burrower")),
-                18, 100f, 6000L,
-                "Найди дверь выхода из лабиринта. Шахта дышит: проходы обрушаются и зарастают за твоей спиной.",
-                DreamObjectiveType.REACH_DOOR, null, 0
-        ));
-
-        // ИЗМЕНЕНО: Кровавый пир - редизайн "Последний ужин": 5 блюд, тронутые отодвинуть, финал - Тост
-        // ИЗМЕНЕНО: боевые мобы убраны по фидбеку — пир пугает атмосферой и гостями, а не боём
-        list.add(new DreamType(
-                SomniumMod.id("crimson_feast"), "somnium.dream.crimson_feast",
-                "somnium:crimson_feast_village",
-                List.of(), // без монстров: судей спавнит сцена, агрессивных мобов чистит свипер
-                14, 100f, 5400L,
-                "Судьи подадут 5 блюд. Свежее блюдо — возьми и съешь (зажми ПКМ). Порченое (зелёное имя и дым) — возьми в левую руку, зажигалку в правую и нажми ПКМ: оно сгорит. В конце возьми Кубок Тоста и выпей его до дна — так ты проснёшься.",
-                null, null, 0 // сон на выполнение сценария пира (блюда + тост), выход через тост
-        ));
-
-        // ИЗМЕНЕНО: Пустота с глазами - оставлена дверь (портал пробуждения логичен)
-        list.add(new DreamType(
-                SomniumMod.id("void_of_eyes"), "somnium.dream.void_of_eyes",
-                "somnium:void_of_eyes_procedural",
-                List.of(SomniumMod.id("watcher")),
-                14, 100f, 4800L,
-                "Отступать к порталу пробуждения, не отрывая взгляда от Наблюдателей.",
-                DreamObjectiveType.REACH_DOOR, null, 0
-        ));
-
-        // ИЗМЕНЕНО: Сон-в-сне - БЕЗ цели, БЕЗ монстров, только таймаут
-        // Игрок должен просто находиться в скопированном мире 7.5 минут
-        list.add(new DreamType(
-                SomniumMod.id("dream_within_dream"), "somnium.dream.dream_within_dream",
-                "NONE",
-                List.of(), // БЕЗ монстров
-                6, 20f, 9000L,
-                "", // БЕЗ цели
-                null, null, 0 // БЕЗ objectiveType - только таймаут
-        ));
-
-        // ИЗМЕНЕНО: 8-й сон "Лестница в никуда" (бывш. "Падающие доски") — подъезд многоэтажки
-        list.add(new DreamType(
-                SomniumMod.id("falling_planks"), "somnium.dream.falling_planks",
-                "somnium:falling_planks_void",
-                List.of(), // нет монстров: свипер шахты страхует от случайных спавнов
-                12, 100f, 3600L, // 3 минуты (короткий, интенсивный сон)
-                "Подъезд, как в многоэтажке: марши уходят вверх и обрушаются за спиной — поднимайся, не стой на месте. Бирюзовые гнилые ступени (дымятся) ломаются под ногами. На последнем этаже открой люк в потолке (ПКМ) — там выход.",
-                null, null, 0 // выход через люк (своя механика), не через дверь
-        ));
-
-        // ДОБАВЛЕНО: 9-й сон "Зеркальная комната" - отражение игрока копирует его, затем атакует
-        list.add(new DreamType(
-                SomniumMod.id("mirror_room"), "somnium.dream.mirror_room",
-                "somnium:mirror_room_chamber",
-                List.of(SomniumMod.id("mirror_reflection")),
-                18, 50f, 3600L, // 3 минуты, требует средний уровень рассудка
-                "Разбить зеркало и победить своё отражение.",
-                DreamObjectiveType.BOSS_KILL, SomniumMod.id("mirror_reflection"), 0
-        ));
-
-        return list;
     }
 }

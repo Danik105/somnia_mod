@@ -1,25 +1,28 @@
 package com.somnium.mod.sanity;
 
 import net.minecraft.nbt.NbtCompound;
+import net.minecraft.nbt.NbtElement;
+import net.minecraft.nbt.NbtList;
+import net.minecraft.nbt.NbtString;
+import net.minecraft.util.Identifier;
 
-/**
- * Чистые данные рассудка одного игрока.
- * Хранятся в персистентных данных игрока (см. SanityManager#load/save)
- * через стандартный механизм PersistentState / кастомные NBT-теги на PlayerEntity.
- */
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+/** Данные рассудка одного игрока. Хранятся в NBT игрока (см. SomniumPlayerState). */
 public final class SanityData {
 
     public static final float MAX_SANITY = 100.0f;
     public static final float MIN_SANITY = 0.0f;
+    /** Сколько последних снов не повторяется при выборе следующего. */
+    private static final int HISTORY_SIZE = 2;
 
-    /** Текущий рассудок игрока, 0..100 */
     private float sanity = MAX_SANITY;
-
-    /** Сколько тиков прошло с последнего успешного сна */
+    /** Тиков с последнего сна (считаются только пока игрок онлайн и не спит). */
     private long ticksSinceLastSleep = 0L;
-
-    /** Идентификатор последнего пройденного сна — нужен для Bleed-Through (спавн "родных" монстров) */
-    private String lastDreamId = "";
+    /** Последние сны, новые — в начале списка. Первый — источник монстров прорыва. */
+    private final List<Identifier> recentDreams = new ArrayList<>();
 
     public float getSanity() {
         return sanity;
@@ -29,42 +32,50 @@ public final class SanityData {
         this.sanity = Math.max(MIN_SANITY, Math.min(MAX_SANITY, value));
     }
 
-    public void addSanity(float delta) {
-        setSanity(this.sanity + delta);
-    }
-
     public long getTicksSinceLastSleep() {
         return ticksSinceLastSleep;
     }
 
     public void setTicksSinceLastSleep(long ticks) {
-        this.ticksSinceLastSleep = ticks;
+        this.ticksSinceLastSleep = Math.max(0L, ticks);
     }
 
-    public void resetSleepTimer() {
-        this.ticksSinceLastSleep = 0L;
+    public List<Identifier> getRecentDreams() {
+        return Collections.unmodifiableList(recentDreams);
     }
 
-    public String getLastDreamId() {
-        return lastDreamId;
+    public Identifier getLastDreamId() {
+        return recentDreams.isEmpty() ? null : recentDreams.get(0);
     }
 
-    public void setLastDreamId(String lastDreamId) {
-        this.lastDreamId = lastDreamId;
+    public void pushDream(Identifier dreamId) {
+        recentDreams.remove(dreamId);
+        recentDreams.add(0, dreamId);
+        while (recentDreams.size() > HISTORY_SIZE) {
+            recentDreams.remove(recentDreams.size() - 1);
+        }
     }
 
     public NbtCompound writeNbt(NbtCompound nbt) {
         nbt.putFloat("Sanity", sanity);
         nbt.putLong("TicksSinceLastSleep", ticksSinceLastSleep);
-        nbt.putString("LastDreamId", lastDreamId);
+        NbtList history = new NbtList();
+        for (Identifier id : recentDreams) {
+            history.add(NbtString.of(id.toString()));
+        }
+        nbt.put("RecentDreams", history);
         return nbt;
     }
 
     public static SanityData readNbt(NbtCompound nbt) {
         SanityData data = new SanityData();
-        data.sanity = nbt.contains("Sanity") ? nbt.getFloat("Sanity") : MAX_SANITY;
-        data.ticksSinceLastSleep = nbt.contains("TicksSinceLastSleep") ? nbt.getLong("TicksSinceLastSleep") : 0L;
-        data.lastDreamId = nbt.contains("LastDreamId") ? nbt.getString("LastDreamId") : "";
+        if (nbt.contains("Sanity")) data.setSanity(nbt.getFloat("Sanity"));
+        data.setTicksSinceLastSleep(nbt.getLong("TicksSinceLastSleep"));
+        NbtList history = nbt.getList("RecentDreams", NbtElement.STRING_TYPE);
+        for (int i = 0; i < history.size() && i < HISTORY_SIZE; i++) {
+            Identifier id = Identifier.tryParse(history.getString(i));
+            if (id != null) data.recentDreams.add(id);
+        }
         return data;
     }
 }

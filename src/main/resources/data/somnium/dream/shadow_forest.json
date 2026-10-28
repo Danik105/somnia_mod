@@ -1,9 +1,12 @@
 {
-  "display_name_key": "somnium.dream.shadow_forest",
-  "structure_template": "somnium:shadow_forest_procedural",
-  "monster_entity_ids": ["somnium:lurking_shade"],
-  "base_weight": 20,
-  "min_sanity_to_appear": 100,
-  "duration_ticks": 7200,
-  "objective": "Иди на ведьмины огни к Дереву-Маяку и встань в его свет — дерево заберёт тебя из сна. Шёпот зовёт обернуться — не смотри: тень ждёт твоего взгляда."
+  "name": "somnium.dream.shadow_forest",
+  "objective": "somnium.dream.shadow_forest.objective",
+  "dimension": "somnium:dream_shadow_forest",
+  "scenario": "somnium:shadow_forest",
+  "monsters": [
+    "somnium:lurking_shade"
+  ],
+  "weight": 20,
+  "max_sanity": 100,
+  "duration_ticks": 7200
 }

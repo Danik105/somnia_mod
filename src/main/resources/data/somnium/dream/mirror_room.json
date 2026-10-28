@@ -1,11 +1,12 @@
 {
-  "display_name_key": "somnium.dream.mirror_room",
-  "structure_template": "somnium:mirror_room_chamber",
-  "monster_entity_ids": ["somnium:mirror_reflection"],
-  "base_weight": 20,
-  "min_sanity_to_appear": 50,
-  "duration_ticks": 3600,
-  "objective": "Разбить зеркало и победить своё отражение.",
-  "objective_type": "BOSS_KILL",
-  "objective_target_id": "somnium:mirror_reflection"
+  "name": "somnium.dream.mirror_room",
+  "objective": "somnium.dream.mirror_room.objective",
+  "dimension": "somnium:dream_mirror_room",
+  "scenario": "somnium:mirror_room",
+  "monsters": [
+    "somnium:mirror_reflection"
+  ],
+  "weight": 18,
+  "max_sanity": 50,
+  "duration_ticks": 3600
 }

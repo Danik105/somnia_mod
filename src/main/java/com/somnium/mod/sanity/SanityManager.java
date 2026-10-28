@@ -1,99 +1,59 @@
 package com.somnium.mod.sanity;
 
+import com.somnium.mod.dream.DreamManager;
+import com.somnium.mod.dream.DreamOutcome;
 import com.somnium.mod.event.BleedThroughManager;
 import com.somnium.mod.network.SanitySyncPayload;
+import com.somnium.mod.player.SomniumPlayerState;
+import com.somnium.mod.registry.ModItems;
 import net.minecraft.server.network.ServerPlayerEntity;
-
-import java.util.HashMap;
-import java.util.Map;
-import java.util.UUID;
+import net.minecraft.text.Text;
+import net.minecraft.util.Identifier;
 
 /**
- * Центральный менеджер рассудка.
- *
- * Правила (согласно ТЗ):
- *  - Более 1 игрового дня (24000 тиков) без сна -> рассудок начинает падать.
- *  - Чем дольше без сна, тем быстрее падение (нелинейная кривая).
- *  - При падении ниже порогов -> BleedThroughManager получает сигнал прорыва кошмаров.
- *  - Успешный сон -> восстановление рассудка (частичное или полное, см. DreamOutcome).
+ * Рассудок:
+ *  - первые сутки (24000 тиков) без сна рассудок не падает, дальше — всё быстрее;
+ *  - Ловец Снов в инвентаре вдвое замедляет падение;
+ *  - восстанавливается сном (см. DreamOutcome) и Осколком Ясности;
+ *  - ниже порогов кошмары прорываются в явь (BleedThroughManager).
+ * Данные хранятся в NBT игрока и переживают перезапуск сервера.
  */
 public final class SanityManager {
 
-    // 1 игровой день = 24000 тиков. Порог, после которого рассудок начинает падать.
     public static final long GRACE_PERIOD_TICKS = 24000L;
 
-    // Пороги прорыва кошмаров в реальность
-    public static final float THRESHOLD_WHISPERS = 50.0f;   // лёгкие эффекты + редкие "эхо"-мобы
-    public static final float THRESHOLD_ECHOES = 25.0f;     // монстры последнего сна начинают появляться
-    public static final float THRESHOLD_RUPTURE = 10.0f;    // полноценное вторжение
+    public static final float THRESHOLD_WHISPERS = 50.0f;
+    public static final float THRESHOLD_ECHOES = 25.0f;
+    public static final float THRESHOLD_RUPTURE = 10.0f;
 
-    // Кэш данных по игрокам в памяти (персистится в NBT игрока при сохранении/загрузке)
-    private static final Map<UUID, SanityData> CACHE = new HashMap<>();
+    private static final float DREAM_CATCHER_DRAIN_MULTIPLIER = 0.5f;
 
     private SanityManager() {}
 
     public static SanityData get(ServerPlayerEntity player) {
-        return CACHE.computeIfAbsent(player.getUuid(), id -> loadFromPlayer(player));
+        return SomniumPlayerState.of(player).sanity();
     }
 
-    private static SanityData loadFromPlayer(ServerPlayerEntity player) {
-        // TODO: заменить на чтение из player.getPersistentData() / кастомного attachment API 26.1
-        // Для 26.1 рекомендуется использовать новый Data Attachment API вместо ручного NBT,
-        // но для наглядности здесь показан классический подход.
-        return new SanityData();
-    }
-
-    public static void persistToPlayer(ServerPlayerEntity player) {
-        SanityData data = get(player);
-        // TODO: сохранить data.writeNbt(...) в attachment/персистентные данные игрока
-    }
-
-    /** Вызывается раз в секунду (20 тиков) для каждого онлайн-игрока. */
+    /** Раз в секунду для каждого онлайн-игрока. */
     public static void tick(ServerPlayerEntity player) {
         SanityData data = get(player);
-        data.setTicksSinceLastSleep(data.getTicksSinceLastSleep() + 20);
+        boolean dreaming = DreamManager.isDreaming(player.getUuid());
+        boolean exempt = player.isCreative() || player.isSpectator();
 
-        long overGrace = data.getTicksSinceLastSleep() - GRACE_PERIOD_TICKS;
-        if (overGrace > 0) {
-            float drainPerSecond = computeDrainRate(overGrace);
-            // ИСПРАВЛЕНО ("Ловец Снов ничего не делает"): DREAM_CATCHER регистрировался как
-            // предмет мода, но ни один кусок кода нигде не проверял, есть ли он у игрока — то
-            // есть предмет физически существовал, но не имел ни одного эффекта. Теперь ослабляет
-            // падение рассудка, если лежит где-то в инвентаре (не обязательно в руке — предмет
-            // задуман как "оберег", который носят с собой, а не активно используют).
-            if (hasDreamCatcher(player)) {
-                drainPerSecond *= DREAM_CATCHER_DRAIN_MULTIPLIER;
+        if (!dreaming && !exempt) {
+            data.setTicksSinceLastSleep(data.getTicksSinceLastSleep() + 20);
+            long overGrace = data.getTicksSinceLastSleep() - GRACE_PERIOD_TICKS;
+            if (overGrace > 0) {
+                float drain = computeDrainRate(overGrace);
+                if (hasDreamCatcher(player)) drain *= DREAM_CATCHER_DRAIN_MULTIPLIER;
+                add(player, -drain, false);
             }
-            float previous = data.getSanity();
-            data.addSanity(-drainPerSecond);
-
-            checkThresholdCrossed(player, previous, data.getSanity());
+            BleedThroughManager.evaluate(player, data);
         }
-
-        BleedThroughManager.evaluate(player, data);
-        SanitySyncPayload.sendTo(player, data.getSanity());
+        sync(player);
     }
 
-    /**
-     * Нелинейная скорость падения рассудка в зависимости от того,
-     * сколько тиков прошло СВЕРХ льготного периода (1 день).
-     *  0-1 день сверх нормы   -> медленно   (~0.15/сек  ≈ 3 пункта в игровую минуту)
-     *  1-3 дня сверх нормы    -> средне     (~0.35/сек)
-     *  3+ дня сверх нормы     -> быстро     (~0.6/сек)
-     */
-    /** Насколько Ловец Снов ослабляет падение рассудка (0.5 = вдвое медленнее) — см. tick(). */
-    private static final float DREAM_CATCHER_DRAIN_MULTIPLIER = 0.5f;
-
-    private static boolean hasDreamCatcher(ServerPlayerEntity player) {
-        var inventory = player.getInventory();
-        for (int slot = 0; slot < inventory.size(); slot++) {
-            if (inventory.getStack(slot).getItem() == com.somnium.mod.registry.ModItems.DREAM_CATCHER) {
-                return true;
-            }
-        }
-        return false;
-    }
-
+    /** 0-1 день сверх нормы — 0.15/сек, 1-3 дня — 0.35/сек, дальше — 0.6/сек. */
     private static float computeDrainRate(long overGraceTicks) {
         long days = overGraceTicks / 24000L;
         if (days < 1) return 0.15f;
@@ -101,42 +61,52 @@ public final class SanityManager {
         return 0.60f;
     }
 
-    private static void checkThresholdCrossed(ServerPlayerEntity player, float before, float after) {
+    private static boolean hasDreamCatcher(ServerPlayerEntity player) {
+        var inventory = player.getInventory();
+        for (int slot = 0; slot < inventory.size(); slot++) {
+            if (inventory.getStack(slot).isOf(ModItems.DREAM_CATCHER)) return true;
+        }
+        return false;
+    }
+
+    /** Изменить рассудок; при пересечении порога вниз — предупреждение в экшенбар. */
+    public static void add(ServerPlayerEntity player, float delta, boolean syncNow) {
+        SanityData data = get(player);
+        float before = data.getSanity();
+        data.setSanity(before + delta);
+        float after = data.getSanity();
         warnIfCrossed(player, before, after, THRESHOLD_WHISPERS, "somnium.warning.whispers");
         warnIfCrossed(player, before, after, THRESHOLD_ECHOES, "somnium.warning.echoes");
         warnIfCrossed(player, before, after, THRESHOLD_RUPTURE, "somnium.warning.rupture");
+        if (syncNow) sync(player);
     }
 
-    private static void warnIfCrossed(ServerPlayerEntity player, float before, float after, float threshold, String langKey) {
+    public static void add(ServerPlayerEntity player, float delta) {
+        add(player, delta, true);
+    }
+
+    public static void set(ServerPlayerEntity player, float value) {
+        get(player).setSanity(value);
+        sync(player);
+    }
+
+    private static void warnIfCrossed(ServerPlayerEntity player, float before, float after, float threshold, String key) {
         if (before > threshold && after <= threshold) {
-            player.sendMessage(net.minecraft.text.Text.translatable(langKey), true);
+            player.sendMessage(Text.translatable(key), true);
         }
     }
 
-    /** Вызывается системой снов при успешном/неуспешном пробуждении. */
-    public static void onWake(ServerPlayerEntity player, DreamOutcome outcome, String dreamId) {
+    public static void sync(ServerPlayerEntity player) {
+        SanitySyncPayload.sendTo(player, get(player).getSanity());
+    }
+
+    /** Итог сна: награда/штраф, история снов, сброс бессонницы. */
+    public static void onWake(ServerPlayerEntity player, DreamOutcome outcome, Identifier dreamId) {
         SanityData data = get(player);
-        data.resetSleepTimer();
-        data.setLastDreamId(dreamId);
-        data.addSanity(outcome.sanityDelta());
-        SanitySyncPayload.sendTo(player, data.getSanity());
-    }
-
-    /** Результат прохождения сна — влияет на восстановление рассудка. */
-    public enum DreamOutcome {
-        SURVIVED_OBJECTIVE(35.0f),   // выполнил цель сна (нашёл артефакт/победил стража)
-        SURVIVED_TIMEOUT(15.0f),    // просто пережил таймер сна
-        DIED_IN_DREAM(-10.0f),      // умер во сне — штраф, а не восстановление
-        WOKE_EARLY(5.0f);           // нашёл "Дверь пробуждения" раньше времени
-
-        private final float sanityDelta;
-
-        DreamOutcome(float sanityDelta) {
-            this.sanityDelta = sanityDelta;
+        if (outcome.countsAsSleep()) {
+            data.setTicksSinceLastSleep(0L);
+            data.pushDream(dreamId);
         }
-
-        public float sanityDelta() {
-            return sanityDelta;
-        }
+        add(player, outcome.sanityDelta(), true);
     }
 }

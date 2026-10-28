@@ -1,28 +1,46 @@
 package com.somnium.mod.mixin;
 
 import com.somnium.mod.dream.DreamManager;
-import net.minecraft.server.MinecraftServer;
+import com.somnium.mod.player.SomniumPlayerAccess;
+import com.somnium.mod.player.SomniumPlayerState;
+import net.minecraft.entity.damage.DamageSource;
+import net.minecraft.nbt.NbtCompound;
 import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * "Смерть" внутри сна не должна быть настоящей смертью — по замыслу мода игрок должен
- * резко ПРОСНУТЬСЯ (вернуться в реальный мир), а не увидеть экран смерти/потерять предметы.
- *
- * Поэтому здесь мы ПОЛНОСТЬЮ ОТМЕНЯЕМ ci.cancel() ванильную обработку смерти, если игрок
- * находится в активном сне, и вместо неё вызываем DreamManager.onDeathInDream(), который
- * восстанавливает здоровье и телепортирует игрока обратно (см. DreamManager#onDeathInDream).
+ *  - хранит данные мода на игроке и сохраняет их в его NBT;
+ *  - смерть во сне — не настоящая смерть: отменяется и превращается в пробуждение;
+ *  - короткая неуязвимость сразу после телепорта в сон и обратно.
  */
 @Mixin(ServerPlayerEntity.class)
-public abstract class ServerPlayerEntityMixin {
+public abstract class ServerPlayerEntityMixin implements SomniumPlayerAccess {
+
+    @Unique
+    private final SomniumPlayerState somnium$state = new SomniumPlayerState();
+
+    @Override
+    public SomniumPlayerState somnium$getState() {
+        return somnium$state;
+    }
+
+    @Inject(method = "writeCustomDataToNbt", at = @At("TAIL"))
+    private void somnium$write(NbtCompound nbt, CallbackInfo ci) {
+        somnium$state.writeNbt(nbt);
+    }
+
+    @Inject(method = "readCustomDataFromNbt", at = @At("TAIL"))
+    private void somnium$read(NbtCompound nbt, CallbackInfo ci) {
+        somnium$state.readNbt(nbt);
+    }
 
     @Inject(method = "onDeath", at = @At("HEAD"), cancellable = true)
-    private void somnium$onDeath(net.minecraft.entity.damage.DamageSource source, CallbackInfo ci) {
+    private void somnium$onDeath(DamageSource source, CallbackInfo ci) {
         ServerPlayerEntity self = (ServerPlayerEntity) (Object) this;
         if (DreamManager.isDreaming(self.getUuid())) {
             ci.cancel();
@@ -30,22 +48,11 @@ public abstract class ServerPlayerEntityMixin {
         }
     }
 
-    /**
-     * ИСПРАВЛЕНИЕ (мгновенная "смерть" от падения сразу при входе в сон): смерть выше
-     * отменяется, но сам урон (и тряска экрана/красная вспышка/звук) уже успевает
-     * произойти к моменту onDeath. В коротком окне после телепортации в сон/обратно
-     * (см. DreamManager#grantLandingImmunity) блокируем любой урон целиком — этого
-     * времени достаточно, чтобы игрок гарантированно "приземлился", а не проходит
-     * насквозь через реальный игровой процесс сна.
-     */
     @Inject(method = "damage", at = @At("HEAD"), cancellable = true)
-    private void somnium$onDamage(net.minecraft.entity.damage.DamageSource source, float amount, CallbackInfoReturnable<Boolean> cir) {
+    private void somnium$onDamage(DamageSource source, float amount, CallbackInfoReturnable<Boolean> cir) {
         ServerPlayerEntity self = (ServerPlayerEntity) (Object) this;
-        if (self.getWorld() instanceof ServerWorld world) {
-            MinecraftServer server = world.getServer();
-            if (server != null && DreamManager.isLandingImmune(self.getUuid(), server.getTicks())) {
-                cir.setReturnValue(false);
-            }
+        if (self.getServer() != null && DreamManager.isLandingImmune(self.getUuid(), self.getServer().getTicks())) {
+            cir.setReturnValue(false);
         }
     }
 }

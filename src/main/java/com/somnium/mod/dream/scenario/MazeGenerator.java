@@ -1,4 +1,4 @@
-package com.somnium.mod.dream;
+package com.somnium.mod.dream.scenario;
 
 import net.minecraft.util.math.BlockPos;
 import java.util.*;

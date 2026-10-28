@@ -1,5343 +1,697 @@
 package com.somnium.mod.dream;
 
 import com.somnium.mod.SomniumMod;
+import com.somnium.mod.advancement.ModCriteria;
 import com.somnium.mod.dimension.ModDimensions;
+import com.somnium.mod.dream.scenario.DreamScenario;
+import com.somnium.mod.dream.scenario.DreamScenarios;
+import com.somnium.mod.entity.SleepingBodyEntity;
 import com.somnium.mod.network.DreamHudPayload;
+import com.somnium.mod.player.SomniumPlayerState;
+import com.somnium.mod.registry.ModEntities;
+import com.somnium.mod.registry.ModItems;
+import com.somnium.mod.registry.ModSounds;
+import com.somnium.mod.sanity.SanityData;
 import com.somnium.mod.sanity.SanityManager;
-import net.minecraft.entity.EntityType;
-import net.minecraft.entity.SpawnReason;
+import net.minecraft.block.BedBlock;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.enums.BedPart;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.decoration.ArmorStandEntity;
-import net.minecraft.entity.mob.MobEntity;
-import net.minecraft.entity.player.PlayerInventory;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
-import net.minecraft.entity.ItemEntity;
-import net.minecraft.registry.Registries;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
-import net.minecraft.util.Identifier;
+import net.minecraft.sound.SoundCategory;
+import net.minecraft.text.Text;
+import net.minecraft.text.TranslatableTextContent;
+import net.minecraft.util.ActionResult;
+import net.minecraft.util.Formatting;
+import net.minecraft.util.Hand;
+import net.minecraft.util.hit.BlockHitResult;
+import net.minecraft.util.math.BlockBox;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
+import net.minecraft.world.GameRules;
 import net.minecraft.world.World;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
+import java.util.Set;
 import java.util.UUID;
 
 /**
- * Отвечает за сам "переход в сон": сохраняет точку возврата, телепортирует
- * игрока в измерение выбранного сна, ставит таймер и цель, а по завершении
- * возвращает игрока обратно и передаёт результат в SanityManager.
+ * Ядро снов: засыпание, вход в сон, тик активных снов и пробуждение.
+ *
+ * Логика конкретных снов живёт в сценариях (dream/scenario), состояние —
+ * в DreamSession. Пробуждение всегда выполняется в конце серверного тика
+ * (requestWake): если будить прямо из обработчика предмета/клика, ванильный код
+ * после этого записал бы предмет сна в руку уже восстановленного инвентаря.
  */
 public final class DreamManager {
 
-    private DreamManager() {}
-
-    private static final Random RANDOM = new Random();
-
-    /** На каком расстоянии от точки спавна игрока появляются монстры сна при входе. */
-    private static final double MONSTER_SPAWN_MIN_RADIUS = 8.0;
-    private static final double MONSTER_SPAWN_MAX_RADIUS = 16.0;
-    /** Босс BOSS_KILL спавнится ближе, чем рядовые монстры — бой должен начаться быстро. */
-    private static final double BOSS_SPAWN_MIN_RADIUS = 6.0;
-    private static final double BOSS_SPAWN_MAX_RADIUS = 10.0;
-    /** Дверь пробуждения (REACH_DOOR) — дальше, чтобы нужно было идти через локацию. */
-    private static final double DOOR_MIN_RADIUS = 180.0;
-    private static final double DOOR_MAX_RADIUS = 250.0;
-    /** Собираемые предметы (COLLECT_ITEMS) — рассыпаны в среднем радиусе вокруг спавна. */
-    private static final double COLLECT_ITEM_MIN_RADIUS = 6.0;
-    private static final double COLLECT_ITEM_MAX_RADIUS = 22.0;
-    /** На каком расстоянии до маркера REACH_DOOR цель считается достигнутой. */
-    private static final double DOOR_REACH_DISTANCE = 2.5;
-
-    /** Активные сны на игрока: куда вернуть игрока, когда сон закончится. */
-    private static final Map<UUID, ActiveDream> ACTIVE = new HashMap<>();
-
-    /**
-     * ДОБАВЛЕНО (мультиплеер, защита кровати): запоминаем обе половины кровати спящего игрока.
-     * Пока игрок во сне, его кровать защищена от разрушения (см. регистрацию в SomniumMod).
-     */
-    private static final Map<UUID, List<BlockPos>> PROTECTED_BEDS = new HashMap<>();
-
-    /**
-     * ДОБАВЛЕНО (мультиплеер, "видимое спящее тело"): хранит UUID спящих тел, которые остаются
-     * в реальном мире, пока игрок находится в измерении сна. Другие игроки видят эти тела лежащими.
-     * (см. spawnSleepingBody/removeSleepingBody)
-     */
-    private static final Map<UUID, UUID> SLEEPING_BODIES = new HashMap<>();
-
-    /**
-     * ДОБАВЛЕНО (мультиплеер): возвращает sessionKey (groupId) для игрока, или его собственный UUID
-     * если игрок не в группе. Используется как ключ для per-dream карт общего стейта (лабиринты,
-     * комнаты, столы и т.д.)
-     */
-    private static UUID sessionKey(UUID playerId) {
-        UUID groupId = SharedDreamSession.getGroupId(playerId);
-        return groupId != null ? groupId : playerId;
-    }
-
-    /** Игроки, которые легли спать и ждут перехода — храним тик, на котором нужно телепортировать. */
-    private static final Map<UUID, Long> PENDING_SLEEP = new HashMap<>();
-
-    /**
-     * ИСПРАВЛЕНИЕ (мгновенная "смерть" при входе в сон): страховочное окно неуязвимости сразу
-     * после телепортации в измерение сна/обратно в явь. Раньше единственной защитой от фатального
-     * урона при приземлении была отмена самой смерти в ServerPlayerEntityMixin — но урон всё равно
-     * успевал применяться, и при плохо готовом хайтмапе игрок мог упасть с большой высоты и тут же
-     * "проснуться", даже не увидев сон. Основная причина (нестабильный хайтмап) исправлена в
-     * ModDimensions#platformSurfaceY, а это — дополнительная страховка на случай будущих расхождений
-     * (например, когда плейсхолдер-генератор заменят на настоящую процедурную генерацию
-     * Приоритета 2, где поверхность заранее не известна арифметически).
-     */
-    private static final Map<UUID, Long> LANDING_IMMUNITY_UNTIL = new HashMap<>();
-    private static final long LANDING_IMMUNITY_TICKS = 20; // 1 секунда
-
-    /**
-     * ДОБАВЛЕНО ("добавь тревожную музыку", "никакого шёпота нету"): когда каждому игроку в
-     * активном сне пора сыграть следующий звук атмосферы/шёпота — см. tickDreamAmbience().
-     * Раньше сны вообще не издавали никаких периодических звуков, только разовые тайтлы.
-     */
-    private static final Map<UUID, Long> NEXT_AMBIENCE_TICK = new HashMap<>();
-    private static final Map<UUID, Long> NEXT_WHISPER_TICK = new HashMap<>();
-
-    // ДОБАВЛЕНО (сон "Лес теней", финальная цель "дойди до Дерева-Маяка, не обернувшись"):
-    /** Тик последнего шёпота за спиной игрока — открывает "окно соблазна" обернуться */
-    private static final Map<UUID, Long> LAST_WHISPER_TICK = new HashMap<>();
-    /** Направление взгляда (yaw) игрока в момент шёпота — шёпот звучит строго сзади */
-    private static final Map<UUID, Float> WHISPER_YAW = new HashMap<>();
-    /** Когда показывать следующую цепочку ведьминых огней к Дереву-Маяку */
-    private static final Map<UUID, Long> NEXT_GUIDE_LIGHT_TICK = new HashMap<>();
-    /** Каждые ~2.5 сек перед игроком загорается цепочка огоньков к цели */
-    private static final int GUIDE_LIGHT_INTERVAL = 50;
-    /** Сколько тиков после шёпота действует "соблазн обернуться" (4 секунды) */
-    private static final int WHISPER_TURN_WINDOW = 80;
-    /** Поворот больше этого угла в окне соблазна = "обернулся на шёпот" */
-    private static final float WHISPER_TURN_ANGLE = 110f;
-
-    // ДОБАВЛЕНО (сон "Лес теней", новый выход "Дерево-Маяк" вместо двери): прогресс "канала" —
-    // сколько тиков игрок непрерывно стоит в свете Дерева-Маяка. Ключ — playerId, как и у
-    // остальных трекеров этого сна (огни/шёпот тоже per-player).
-    private static final Map<UUID, Integer> BEACON_TREE_CHANNEL_TICKS = new HashMap<>();
-    /** Радиус света Дерева-Маяка, в котором идёт канал пробуждения */
-    private static final double BEACON_TREE_CHANNEL_RADIUS = 3.0;
-    /** Сколько тиков нужно простоять в свете дерева, чтобы оно забирало игрока из сна (5 сек) */
-    private static final int BEACON_TREE_CHANNEL_REQUIRED = 100;
-
-    /**
-     * Сколько тиков игрок лежит в кровати (уже "спит" по мнению ванильной игры — экран
-     * плавно темнеет сам, это встроенный ванильный эффект isSleeping()), прежде чем его
-     * телепортирует в измерение сна. 60 тиков = 3 секунды.
-     */
+    /** Сколько игрок лежит в кровати (экран темнеет), прежде чем провалиться в сон. */
     public static final long SLEEP_TRANSITION_TICKS = 60;
+    /** Первые 12 секунд сна монстры не атакуют — дать осмотреться. */
+    public static final long DREAM_ENTRY_GRACE_TICKS = 240;
+    /** Засыпающий в течение 10 секунд после начала чужого сна присоединяется к нему. */
+    private static final long JOIN_WINDOW_TICKS = 200;
+    private static final long LANDING_IMMUNITY_TICKS = 20;
+    private static final double REAL_BELL_RADIUS = 5.0;
 
-    private record ActiveDream(
-            Identifier dreamId,
-            RegistryKey<World> returnDimension,
-            BlockPos returnPos,
-            long enterTick,
-            long durationTicks,
-            String objective,
-            /**
-             * ИСПРАВЛЕНИЕ ("попадаю в сон с вещами из реального мира"): снимок инвентаря игрока
-             * (основной инвентарь + броня + офф-хенд — всё, что покрывает PlayerInventory#size())
-             * на момент засыпания. Хранится в памяти как копии ItemStack — сериализация в NBT не
-             * нужна, т.к. используется только внутри одной серверной сессии (симметрично тому, как
-             * уже хранится сама точка возврата/таймер сна — тоже только в памяти, см. ACTIVE).
-             * При входе в сон реальный инвентарь очищается (см. enterDream), а при пробуждении
-             * восстанавливается из этого списка ЦЕЛИКОМ (см. wake) — то, что игрок подобрал во сне,
-             * не переносится в явь.
-             */
-            List<ItemStack> savedInventory,
-            /**
-             * ДОБАВЛЕНО (сохранение состояния здоровья и сытости): снимок физического состояния
-             * игрока на момент засыпания. При пробуждении восстанавливается полностью — урон и
-             * голод, полученные во сне, не переносятся в реальность.
-             */
-            float savedHealth,
-            int savedFoodLevel,
-            float savedSaturation,
-            /**
-             * ДОБАВЛЕНО ("задание сна нельзя выполнить"): как именно проверять цель этого
-             * конкретного сна — см. DreamObjectiveType и tickActiveDreams().
-             */
-            DreamObjectiveType objectiveType,
-            /** Для REACH_DOOR — координата маркера "Двери пробуждения"; null для других типов. */
-            BlockPos doorPos,
-            /** Для BOSS_KILL — UUID гарантированно заспавненного экземпляра цели; null иначе. */
-            UUID bossTargetUuid,
-            /** Для COLLECT_ITEMS — какой предмет и сколько нужно собрать; null/0 для других типов. */
-            Identifier collectItemId,
-            int collectItemCount
-    ) {}
+    private static final class Participant {
+        final UUID playerId;
+        final DreamSession session;
+        final DreamSnapshot snapshot;
+        final long enterTick;
+        final List<BlockPos> bedBlocks = new ArrayList<>();
+        long nextAmbienceTick;
+        @Nullable UUID bodyId;
 
-    /**
-     * Вызывается при засыпании игрока (см. PlayerEntityMixin#somnium$onSleep).
-     * НЕ телепортирует сразу — ставит игрока в очередь на переход через SLEEP_TRANSITION_TICKS
-     * тиков. Пока игрок лежит в кровати, ванильная игра сама плавно затемняет экран
-     * (встроенный эффект "сна"), и телепорт происходит уже на чёрном экране, а не рывком.
-     * Если игрок встанет раньше времени (проснётся вручную/его разбудят) — переход отменяется
-     * автоматически в tickPendingSleepTransitions().
-     */
-    public static void scheduleDream(ServerPlayerEntity player) {
-        MinecraftServer server = ((ServerWorld) player.getEntityWorld()).getServer();
-        if (server == null) return;
-        PENDING_SLEEP.put(player.getUuid(), server.getTicks() + SLEEP_TRANSITION_TICKS);
-    }
-
-    /**
-     * ДОБАВЛЕНО (команда /testdream): мгновенно запускает полноценный сон с указанным типом,
-     * минуя ожидание в кровати. Используется командой для быстрого тестирования снов.
-     * Выполняет все те же действия, что и обычный вход в сон через кровать.
-     */
-    public static void enterDreamDirectly(ServerPlayerEntity player, DreamType dreamType) {
-        if (player == null || dreamType == null) return;
-        MinecraftServer server = ((ServerWorld) player.getEntityWorld()).getServer();
-        if (server == null) return;
-        // Для команды /testdream всегда создаём НОВУЮ группу (не присоединяемся к существующей)
-        UUID groupId = SharedDreamSession.createGroup(player.getUuid(), dreamType.id(), server.getTicks());
-        enterDreamWithType(player, dreamType, groupId, true);
-    }
-
-    /** Вызывается тик-обработчиком: проверяет, не пора ли телепортировать заснувших игроков. */
-    public static void tickPendingSleepTransitions(MinecraftServer server) {
-        if (PENDING_SLEEP.isEmpty()) return;
-
-        var iterator = PENDING_SLEEP.entrySet().iterator();
-        while (iterator.hasNext()) {
-            var entry = iterator.next();
-            if (server.getTicks() < entry.getValue()) continue;
-            iterator.remove();
-
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(entry.getKey());
-            if (player == null) continue;
-            if (!player.isSleeping()) continue; // встал раньше времени — переход отменён
-
-            enterDream(player);
+        Participant(UUID playerId, DreamSession session, DreamSnapshot snapshot, long enterTick) {
+            this.playerId = playerId;
+            this.session = session;
+            this.snapshot = snapshot;
+            this.enterTick = enterTick;
         }
     }
 
-    /** Собственно телепортация в измерение сна — вызывается только из tickPendingSleepTransitions(). */
-    private static void enterDream(ServerPlayerEntity player) {
-        MinecraftServer server = ((ServerWorld) player.getEntityWorld()).getServer();
-        if (server == null) return;
+    private static final Map<UUID, Participant> PARTICIPANTS = new HashMap<>();
+    private static final List<DreamSession> SESSIONS = new ArrayList<>();
+    private static final Map<String, DreamSession> SESSIONS_BY_TAG = new HashMap<>();
+    private static final Map<UUID, Long> PENDING_SLEEP = new HashMap<>();
+    private static final Map<UUID, DreamOutcome> PENDING_WAKE = new LinkedHashMap<>();
+    private static final Set<UUID> PENDING_RESTORE = new HashSet<>();
+    private static final Map<UUID, Long> LANDING_IMMUNITY = new HashMap<>();
+    private static final List<Entity> PENDING_DISCARD = new ArrayList<>();
 
-        float sanity = SanityManager.get(player).getSanity();
+    private DreamManager() {}
+
+    // =====================================================================
+    // Запросы состояния
+    // =====================================================================
+
+    public static boolean isDreaming(UUID playerId) {
+        return PARTICIPANTS.containsKey(playerId);
+    }
+
+    @Nullable
+    public static DreamSession sessionOf(UUID playerId) {
+        Participant p = PARTICIPANTS.get(playerId);
+        return p == null ? null : p.session;
+    }
+
+    public static Collection<DreamSession> sessions() {
+        return Collections.unmodifiableList(SESSIONS);
+    }
+
+    public static boolean isInDreamEntryGrace(UUID playerId, long nowTicks) {
+        Participant p = PARTICIPANTS.get(playerId);
+        return p != null && nowTicks - p.enterTick < DREAM_ENTRY_GRACE_TICKS;
+    }
+
+    public static boolean isLandingImmune(UUID playerId, long nowTicks) {
+        Long until = LANDING_IMMUNITY.get(playerId);
+        return until != null && nowTicks < until;
+    }
+
+    public static boolean isBedProtected(ServerWorld world, BlockPos pos) {
+        for (Participant p : PARTICIPANTS.values()) {
+            if (p.snapshot.returnWorld.equals(world.getRegistryKey()) && p.bedBlocks.contains(pos)) return true;
+        }
+        return false;
+    }
+
+    // =====================================================================
+    // Засыпание и вход в сон
+    // =====================================================================
+
+    /** Игрок успешно лёг в кровать (PlayerEntityMixin). */
+    public static void onPlayerSlept(ServerPlayerEntity player) {
+        if (DreamRegistry.isEmpty() || isDreaming(player.getUuid())) return;
+        if (ModDimensions.isDreamDimension(player.getWorld().getRegistryKey())) return;
+        PENDING_SLEEP.put(player.getUuid(), player.getServer().getTicks() + SLEEP_TRANSITION_TICKS);
+    }
+
+    private static void processPendingSleeps(MinecraftServer server, long now) {
+        if (PENDING_SLEEP.isEmpty()) return;
+        Iterator<Map.Entry<UUID, Long>> it = PENDING_SLEEP.entrySet().iterator();
+        List<ServerPlayerEntity> ready = new ArrayList<>();
+        while (it.hasNext()) {
+            var entry = it.next();
+            if (now < entry.getValue()) continue;
+            it.remove();
+            ServerPlayerEntity player = server.getPlayerManager().getPlayer(entry.getKey());
+            if (player != null && player.isSleeping() && player.isAlive()) ready.add(player);
+        }
+        for (ServerPlayerEntity player : ready) {
+            DreamSession joinable = findJoinableSession(player);
+            if (joinable != null) {
+                enterDream(player, joinable.type, joinable);
+                continue;
+            }
+            SanityData sanity = SanityManager.get(player);
+            DreamType type = DreamRegistry.pick(sanity.getSanity(), sanity.getRecentDreams());
+            if (type != null) enterDream(player, type, null);
+        }
+    }
+
+    @Nullable
+    private static DreamSession findJoinableSession(ServerPlayerEntity player) {
+        for (int i = SESSIONS.size() - 1; i >= 0; i--) {
+            DreamSession session = SESSIONS.get(i);
+            if (session.isEnded() || session.elapsed() > JOIN_WINDOW_TICKS) continue;
+            if (!session.scenario.allowsJoining()) continue;
+            for (UUID member : session.members()) {
+                Participant p = PARTICIPANTS.get(member);
+                if (p != null && p.snapshot.returnWorld.equals(player.getWorld().getRegistryKey())) return session;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Переносит игрока в сон. join == null — начать новый сон (игрок станет лидером),
+     * иначе — присоединиться к существующему. Возвращает false, если сон не начался
+     * (в этом случае с игроком ничего не происходит).
+     */
+    public static boolean enterDream(ServerPlayerEntity player, DreamType type, @Nullable DreamSession join) {
+        if (isDreaming(player.getUuid()) || !player.isAlive() || player.isSpectator()) return false;
+        if (SomniumPlayerState.of(player).dreamSnapshot() != null) return false; // ещё не восстановлен после обрыва
+        MinecraftServer server = player.getServer();
+        ServerWorld dreamWorld = server.getWorld(type.dimension());
+        if (dreamWorld == null) {
+            SomniumMod.LOGGER.warn("[Somnium] Измерение {} для сна {} не найдено", type.dimension().getValue(), type.id());
+            return false;
+        }
+
+        // Сначала встаём с кровати: позиция игрока становится точкой пробуждения рядом с кроватью
+        BlockPos bedPos = player.getSleepingPosition().orElse(null);
+        if (player.isSleeping()) player.wakeUp(false, true);
+        PENDING_SLEEP.remove(player.getUuid());
+
+        boolean leader = join == null;
+        DreamSession session = leader ? createSession(type, dreamWorld, player) : join;
+        if (session == null) return false;
+
+        DreamSnapshot snapshot = DreamSnapshot.capture(player, type.id(), bedPos);
+        SomniumPlayerState.of(player).setDreamSnapshot(snapshot.toNbt());
+
         long now = server.getTicks();
+        Participant participant = new Participant(player.getUuid(), session, snapshot, now);
+        participant.nextAmbienceTick = now + 100;
+        PARTICIPANTS.put(player.getUuid(), participant);
+        session.addMember(player.getUuid());
+        protectBed(participant, player);
+        spawnSleepingBody(participant, player);
 
-        // ИЗМЕНЕНО (мультиплеер, задача 8/8): ищем существующую группу в окне объединения
-        UUID joinableGroupId = SharedDreamSession.findJoinableGroup(ACTIVE.keySet(), now);
+        DreamSnapshot.prepareDreamBody(player);
+        BlockPos spawn = leader ? session.spawn() : session.scenario.joinSpawn(session, player);
+        teleport(player, dreamWorld, Vec3d.ofBottomCenter(spawn), player.getYaw(), 0.0f);
 
-        if (joinableGroupId != null) {
-            // Присоединяемся к существующей группе
-            SharedDreamSession.GroupInfo groupInfo = SharedDreamSession.getGroup(joinableGroupId);
-            if (groupInfo != null) {
-                DreamType dream = DreamRegistry.get(groupInfo.dreamId);
-                if (dream != null) {
-                    SharedDreamSession.joinGroup(player.getUuid(), joinableGroupId);
-                    SomniumMod.LOGGER.info("[Somnium] Игрок {} присоединяется к группе {} (сон: {})",
-                            player.getName().getString(), joinableGroupId, groupInfo.dreamId);
-                    enterDreamWithType(player, dream, joinableGroupId, false);
+        DreamScenario scenario = session.scenario;
+        if (!scenario.isSilent()) {
+            scenario.applyEffects(player, type.durationTicks() + 100);
+            DreamFx.title(player, Text.translatable(type.nameKey()).formatted(Formatting.DARK_RED),
+                    Text.translatable("somnium.dream.subtitle").formatted(Formatting.GRAY), 10, 50, 20);
+            player.sendMessage(Text.translatable(type.nameKey()).formatted(Formatting.RED, Formatting.BOLD), false);
+            player.sendMessage(Text.translatable("somnium.dream.objective",
+                    Text.translatable(type.objectiveKey())).formatted(Formatting.GRAY), false);
+            player.playSound(ModSounds.DREAM_ENTER, SoundCategory.AMBIENT, 1.0f, 0.7f);
+            sendHud(player, session);
+        }
+        scenario.onJoin(session, player, leader);
+        ModCriteria.FIRST_DREAM.trigger(player);
+        SomniumMod.LOGGER.info("[Somnium] {} {} сон {} (слот {})", player.getName().getString(),
+                leader ? "начинает" : "присоединяется к", type.id(), session.slot);
+        return true;
+    }
+
+    @Nullable
+    private static DreamSession createSession(DreamType type, ServerWorld world, ServerPlayerEntity leader) {
+        DreamScenario scenario = DreamScenarios.create(type.scenario());
+        if (scenario == null) return null;
+        int slot = DreamSlots.allocate(world);
+        BlockPos origin = DreamSlots.origin(world, slot, scenario.originY(world, DreamSlots.surfaceY(world)));
+        DreamSession session = new DreamSession(type, world, slot, origin, scenario);
+        // Сессия регистрируется до постройки: сущности, созданные сценарием, сразу признаются своими
+        SESSIONS.add(session);
+        SESSIONS_BY_TAG.put(session.sessionTag(), session);
+        try {
+            BlockPos spawn = scenario.setup(session, leader);
+            session.setSpawn(spawn);
+            session.setBounds(scenario.buildBounds(session), scenario.areaRadius());
+            DreamSlots.markDirty(world, slot, session.buildBox());
+            return session;
+        } catch (RuntimeException e) {
+            SomniumMod.LOGGER.error("[Somnium] Не удалось построить сон {}", type.id(), e);
+            session.setBounds(new BlockBox(origin).expand(64), 64);
+            DreamSlots.markDirty(world, slot, session.buildBox());
+            endSession(session);
+            return null;
+        }
+    }
+
+    // =====================================================================
+    // Пробуждение
+    // =====================================================================
+
+    /** Разбудить игрока в конце текущего тика. Возвращает false, если пробуждение уже запрошено. */
+    public static boolean requestWake(ServerPlayerEntity player, DreamOutcome outcome) {
+        if (!isDreaming(player.getUuid())) return false;
+        return PENDING_WAKE.putIfAbsent(player.getUuid(), outcome) == null;
+    }
+
+    public static boolean isWakePending(UUID playerId) {
+        return PENDING_WAKE.containsKey(playerId);
+    }
+
+    private static void processPendingWakes(MinecraftServer server) {
+        if (PENDING_WAKE.isEmpty()) return;
+        var copy = new ArrayList<>(PENDING_WAKE.entrySet());
+        PENDING_WAKE.clear();
+        for (var entry : copy) {
+            ServerPlayerEntity player = server.getPlayerManager().getPlayer(entry.getKey());
+            if (player != null) wake(player, entry.getValue());
+        }
+    }
+
+    /** Немедленное пробуждение. Из обработчиков предметов/кликов используйте requestWake. */
+    public static void wake(ServerPlayerEntity player, DreamOutcome outcome) {
+        Participant participant = PARTICIPANTS.remove(player.getUuid());
+        PENDING_WAKE.remove(player.getUuid());
+        if (participant == null) return;
+        DreamSession session = participant.session;
+
+        leaveSession(participant, player);
+        returnToReality(player, participant.snapshot);
+        SomniumPlayerState.of(player).setDreamSnapshot(null);
+        removeSleepingBody(player.getServer(), participant);
+        DreamHints.clear(player.getUuid());
+        DreamHudPayload.sendInactive(player);
+
+        ServerWorld returnWorld = player.getServerWorld();
+        if (outcome.countsAsSleep()) maybeSkipNight(returnWorld);
+        SanityManager.onWake(player, outcome, session.type.id());
+        if (outcome == DreamOutcome.SURVIVED_OBJECTIVE) {
+            // Победа над кошмаром оставляет след — единственная добыча, которую можно вынести из сна
+            player.getInventory().offerOrDrop(new ItemStack(ModItems.NIGHTMARE_ESSENCE, 1 + session.random.nextInt(2)));
+            player.sendMessage(Text.translatable("somnium.dream.essence_reward").formatted(Formatting.DARK_PURPLE), false);
+        }
+
+        DreamFx.title(player, Text.translatable("somnium.dream.wake").formatted(Formatting.GRAY),
+                Text.translatable("somnium.outcome." + outcome.name().toLowerCase()).formatted(Formatting.DARK_GRAY),
+                10, 50, 20);
+        player.playSound(ModSounds.DREAM_WAKE, SoundCategory.PLAYERS, 1.0f, 1.0f);
+        SomniumMod.LOGGER.info("[Somnium] {} просыпается из {}: {}", player.getName().getString(),
+                session.type.id(), outcome);
+    }
+
+    /** Смерть во сне отменена миксином — вместо неё пробуждение со штрафом. */
+    public static void onDeathInDream(ServerPlayerEntity player) {
+        player.setHealth(player.getMaxHealth());
+        player.clearStatusEffects();
+        player.extinguish();
+        player.fallDistance = 0;
+        requestWake(player, DreamOutcome.DIED_IN_DREAM);
+    }
+
+    private static void leaveSession(Participant participant, ServerPlayerEntity player) {
+        DreamSession session = participant.session;
+        session.removeMember(participant.playerId);
+        if (player != null) session.scenario.onLeave(session, player);
+        if (session.isEmpty()) endSession(session);
+    }
+
+    private static void endSession(DreamSession session) {
+        if (session.isEnded()) return;
+        session.markEnded();
+        SESSIONS.remove(session);
+        SESSIONS_BY_TAG.remove(session.sessionTag());
+        try {
+            session.scenario.onEnd(session);
+        } catch (RuntimeException e) {
+            SomniumMod.LOGGER.error("[Somnium] Ошибка при завершении сна {}", session.type.id(), e);
+        }
+        DreamSlots.release(session.world, session.slot, session.areaBox());
+    }
+
+    private static void returnToReality(ServerPlayerEntity player, DreamSnapshot snapshot) {
+        MinecraftServer server = player.getServer();
+        ServerWorld world = server.getWorld(snapshot.returnWorld);
+        Vec3d pos = snapshot.returnPos;
+        if (world == null) {
+            world = server.getOverworld();
+            pos = Vec3d.ofBottomCenter(world.getSpawnPos());
+        }
+        player.stopRiding();
+        teleport(player, world, pos, snapshot.yaw, snapshot.pitch);
+        snapshot.restore(player);
+    }
+
+    private static void teleport(ServerPlayerEntity player, ServerWorld world, Vec3d pos, float yaw, float pitch) {
+        player.teleport(world, pos.x, pos.y, pos.z, yaw, pitch);
+        player.setVelocity(Vec3d.ZERO);
+        player.fallDistance = 0;
+        LANDING_IMMUNITY.put(player.getUuid(), player.getServer().getTicks() + LANDING_IMMUNITY_TICKS);
+    }
+
+    /**
+     * Ванильный пропуск ночи обрывается, когда спящий уходит в сон, поэтому делаем его сами —
+     * с учётом правила playersSleepingPercentage: спящими считаются и те, кто сейчас во сне.
+     */
+    private static void maybeSkipNight(ServerWorld world) {
+        if (!world.getDimension().hasSkyLight() || world.getDimension().hasFixedTime()) return;
+        if (!world.isNight() && !world.isThundering()) return;
+        int total = 0;
+        int slept = 1; // проснувшийся игрок
+        for (ServerPlayerEntity other : world.getPlayers()) {
+            if (other.isSpectator()) continue;
+            total++;
+            if (other.isSleeping()) slept++;
+        }
+        // Проснувшийся уже в этом мире и посчитан в total; добавляем тех, кто ещё во сне
+        for (Participant p : PARTICIPANTS.values()) {
+            if (p.snapshot.returnWorld.equals(world.getRegistryKey())) {
+                total++;
+                slept++;
+            }
+        }
+        slept = Math.min(slept, Math.max(total, 1));
+        int percentage = world.getGameRules().getInt(GameRules.PLAYERS_SLEEPING_PERCENTAGE);
+        if (slept * 100 < Math.max(total, 1) * percentage) return;
+        if (world.isNight()) {
+            long time = world.getTimeOfDay();
+            world.setTimeOfDay(time - Math.floorMod(time, 24000L) + 24000L);
+        }
+        world.setWeather(0, 0, false, false);
+    }
+
+    // =====================================================================
+    // Тик
+    // =====================================================================
+
+    public static void tick(MinecraftServer server) {
+        long now = server.getTicks();
+        flushDiscards();
+        processPendingRestores(server);
+        processPendingWakes(server);
+        processPendingSleeps(server, now);
+
+        for (DreamSession session : new ArrayList<>(SESSIONS)) {
+            tickSession(session);
+        }
+        processPendingWakes(server);
+
+        DreamHints.tick(server);
+        if (!LANDING_IMMUNITY.isEmpty()) LANDING_IMMUNITY.values().removeIf(until -> now >= until);
+        if (now % 20 == 0) {
+            for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
+                SanityManager.tick(player);
+                Participant p = PARTICIPANTS.get(player.getUuid());
+                if (p != null && !p.session.scenario.isSilent()) sendHud(player, p.session);
+            }
+        }
+        DreamSlots.tick();
+    }
+
+    private static void tickSession(DreamSession session) {
+        if (session.isEnded()) return;
+        MinecraftServer server = session.server();
+        for (UUID id : new ArrayList<>(session.members())) {
+            ServerPlayerEntity player = server.getPlayerManager().getPlayer(id);
+            if (player != null && player.getWorld() != session.world) {
+                // Игрока вынесло из сна другим путём (команда /tp и т.п.)
+                requestWake(player, DreamOutcome.WOKE_EARLY);
+            }
+        }
+        DreamScenario scenario = session.scenario;
+        try {
+            scenario.tick(session);
+            for (ServerPlayerEntity player : session.players()) {
+                if (isWakePending(player.getUuid())) continue;
+                enforceBoundary(session, player);
+                scenario.tickPlayer(session, player);
+                tickAmbience(session, player);
+            }
+        } catch (RuntimeException e) {
+            // Ошибка сценария не должна ронять сервер: будим всех с исходом "проснулся сам"
+            SomniumMod.LOGGER.error("[Somnium] Ошибка в сне {}", session.type.id(), e);
+            session.wakeAll(DreamOutcome.WOKE_EARLY);
+            return;
+        }
+        if (session.elapsed() >= session.type.durationTicks()) {
+            session.wakeAll(DreamOutcome.SURVIVED_TIMEOUT);
+        }
+    }
+
+    /** Открытые сны не отпускают за свою границу — иначе игрок ушёл бы в бесконечный плоский мир. */
+    private static void enforceBoundary(DreamSession session, ServerPlayerEntity player) {
+        int radius = session.scenario.boundaryRadius();
+        if (radius <= 0) return;
+        double dx = player.getX() - (session.origin.getX() + 0.5);
+        double dz = player.getZ() - (session.origin.getZ() + 0.5);
+        double dist = Math.sqrt(dx * dx + dz * dz);
+        if (dist <= radius) return;
+        double scale = (radius - 6) / dist;
+        int x = MathHelper.floor(session.origin.getX() + 0.5 + dx * scale);
+        int z = MathHelper.floor(session.origin.getZ() + 0.5 + dz * scale);
+        BlockPos target = session.groundNear(x, (int) player.getY(), z);
+        player.teleport(session.world, target.getX() + 0.5, target.getY(), target.getZ() + 0.5,
+                player.getYaw() + 180.0f, player.getPitch());
+        player.fallDistance = 0;
+        player.sendMessage(Text.translatable("somnium.dream.boundary").formatted(Formatting.DARK_PURPLE), true);
+    }
+
+    private static void tickAmbience(DreamSession session, ServerPlayerEntity player) {
+        if (session.scenario.isSilent()) return;
+        Participant p = PARTICIPANTS.get(player.getUuid());
+        if (p == null || session.now() < p.nextAmbienceTick) return;
+        player.playSound(ModSounds.DREAM_DREAD_AMBIENCE, SoundCategory.AMBIENT, 0.5f, 0.7f + session.random.nextFloat() * 0.3f);
+        p.nextAmbienceTick = session.now() + 160 + session.random.nextInt(120);
+    }
+
+    private static void sendHud(ServerPlayerEntity player, DreamSession session) {
+        DreamHudPayload.sendActive(player, session.type.nameKey(), session.type.objectiveKey(),
+                (int) session.remaining(), session.type.durationTicks());
+    }
+
+    // =====================================================================
+    // Подключение / отключение / остановка сервера
+    // =====================================================================
+
+    public static void onPlayerJoin(ServerPlayerEntity player) {
+        PENDING_RESTORE.add(player.getUuid());
+        SanityManager.sync(player);
+    }
+
+    /** Через тик после входа: если сон оборвался (выход/падение сервера) — вернуть игрока в явь. */
+    private static void processPendingRestores(MinecraftServer server) {
+        if (PENDING_RESTORE.isEmpty()) return;
+        for (UUID id : new ArrayList<>(PENDING_RESTORE)) {
+            PENDING_RESTORE.remove(id);
+            ServerPlayerEntity player = server.getPlayerManager().getPlayer(id);
+            if (player == null || isDreaming(id)) continue;
+            SomniumPlayerState state = SomniumPlayerState.of(player);
+            if (state.dreamSnapshot() != null) {
+                DreamSnapshot snapshot = DreamSnapshot.fromNbt(state.dreamSnapshot());
+                state.setDreamSnapshot(null);
+                if (snapshot != null) {
+                    returnToReality(player, snapshot);
+                    SanityManager.onWake(player, DreamOutcome.INTERRUPTED, snapshot.dreamId);
+                    player.sendMessage(Text.translatable("somnium.dream.interrupted").formatted(Formatting.GRAY), false);
+                    SomniumMod.LOGGER.info("[Somnium] {}: сон оборвался, состояние яви восстановлено", player.getName().getString());
+                    continue;
+                }
+            }
+            if (ModDimensions.isSessionDimension(player.getWorld().getRegistryKey())) {
+                // Застрял в измерении сна без снимка (данные старой версии мода) — домой
+                ServerWorld overworld = server.getOverworld();
+                BlockPos spawn = player.getSpawnPointPosition() != null
+                        && player.getSpawnPointDimension() == World.OVERWORLD
+                        ? player.getSpawnPointPosition() : overworld.getSpawnPos();
+                teleport(player, overworld, Vec3d.ofBottomCenter(spawn).add(0, 1, 0), player.getYaw(), 0.0f);
+                player.sendMessage(Text.translatable("somnium.dream.interrupted").formatted(Formatting.GRAY), false);
+            }
+        }
+    }
+
+    public static void onPlayerDisconnect(ServerPlayerEntity player) {
+        UUID id = player.getUuid();
+        PENDING_SLEEP.remove(id);
+        PENDING_WAKE.remove(id);
+        PENDING_RESTORE.remove(id);
+        DreamHints.clear(id);
+        Participant participant = PARTICIPANTS.remove(id);
+        if (participant == null) return;
+        // Снимок яви остаётся в NBT игрока и будет восстановлен при следующем входе
+        leaveSession(participant, player);
+        removeSleepingBody(player.getServer(), participant);
+    }
+
+    public static void onServerStopping() {
+        for (Participant participant : new ArrayList<>(PARTICIPANTS.values())) {
+            leaveSession(participant, null);
+        }
+        PARTICIPANTS.clear();
+        SESSIONS.clear();
+        SESSIONS_BY_TAG.clear();
+        PENDING_SLEEP.clear();
+        PENDING_WAKE.clear();
+        PENDING_RESTORE.clear();
+        LANDING_IMMUNITY.clear();
+        PENDING_DISCARD.clear();
+    }
+
+    // =====================================================================
+    // Сущности: принадлежность снам
+    // =====================================================================
+
+    /**
+     * Каждая загружаемая в измерении сна сущность должна принадлежать активному сну.
+     * Чужие и оставшиеся от прошлых снов (в т.ч. после перезапуска) удаляются.
+     * Заодно убираем "тела" из стоек для брони, которые оставляла версия 0.2.
+     */
+    public static void onEntityLoad(Entity entity, ServerWorld world) {
+        if (entity instanceof PlayerEntity) return;
+        if (entity instanceof ArmorStandEntity stand && isLegacySleepingBody(stand)) {
+            PENDING_DISCARD.add(entity);
+            return;
+        }
+        if (!ModDimensions.isSessionDimension(world.getRegistryKey())) return;
+
+        boolean tagged = false;
+        for (String tag : entity.getCommandTags()) {
+            DreamSession owner = SESSIONS_BY_TAG.get(tag);
+            if (owner != null && !owner.isEnded()) return;
+            if (tag.equals(DreamSession.ENTITY_TAG)) tagged = true;
+        }
+        if (!tagged && !(entity instanceof ArmorStandEntity)) {
+            for (DreamSession session : SESSIONS) {
+                if (session.world == world && session.isInArea(entity.getBlockPos())) {
+                    session.tag(entity); // выпавший лут, опыт, снаряды — часть этого сна
                     return;
                 }
             }
         }
-
-        // Создаём новую группу — игрок становится лидером
-        DreamType dream = SharedDreamSession.pickNextDream(player, sanity);
-        UUID groupId = SharedDreamSession.createGroup(player.getUuid(), dream.id(), now);
-        SomniumMod.LOGGER.info("[Somnium] Игрок {} создаёт новую группу {} (сон: {})",
-                player.getName().getString(), groupId, dream.id());
-        enterDreamWithType(player, dream, groupId, true);
+        PENDING_DISCARD.add(entity);
     }
 
-    /**
-     * Общая логика входа в сон с конкретным типом сна.
-     *
-     * @param player игрок, входящий в сон
-     * @param dream тип сна
-     * @param groupId UUID группы общего сна
-     * @param isLeader true, если игрок создаёт новый инстанс сна (лидер), false если присоединяется к существующему
-     */
-    private static void enterDreamWithType(ServerPlayerEntity player, DreamType dream, UUID groupId, boolean isLeader) {
-        RegistryKey<World> dreamDimension = ModDimensions.forDreamId(dream.id());
-
-        MinecraftServer server = ((ServerWorld) player.getEntityWorld()).getServer();
-        if (server == null) return;
-        ServerWorld dreamWorld = server.getWorld(dreamDimension);
-        if (dreamWorld == null) {
-            SomniumMod.LOGGER.warn("[Somnium] Измерение сна {} не найдено — проверьте datapack измерений!", dreamDimension.getValue());
-            return;
-        }
-
-        // ДОБАВЛЕНО: триггерим ачивку "Первое сноведение" при первом входе в любой сон
-        com.somnium.mod.advancement.ModCriteria.FIRST_DREAM.trigger(player);
-
-        // ИСПРАВЛЕНИЕ ("попадаю в сон с вещами из реального мира"): снимаем копию инвентаря
-        // ДО телепортации и очищаем его — во сне у игрока должно быть пусто. Оригинальные вещи
-        // хранятся в ActiveDream и возвращаются в wake() целиком, что бы ни случилось во сне.
-        List<ItemStack> savedInventory = snapshotAndClearInventory(player);
-
-        // ДОБАВЛЕНО (сохранение состояния здоровья и сытости): фиксируем физическое состояние
-        // игрока ДО телепортации в сон — при пробуждении оно будет восстановлено полностью.
-        float savedHealth = player.getHealth();
-        int savedFoodLevel = player.getHungerManager().getFoodLevel();
-        float savedSaturation = player.getHungerManager().getSaturationLevel();
-
-        // ВАЖНО: точку и измерение возврата нужно зафиксировать ДО телепортации — иначе
-        // player.getEntityWorld()/getBlockPos() ниже вернут уже координаты сна, а не яви.
-        RegistryKey<World> returnDimension = player.getEntityWorld().getRegistryKey();
-        BlockPos returnPos = player.getBlockPos();
-
-        // ДОБАВЛЕНО (мультиплеер, защита кровати): запоминаем позиции обеих половин кровати
-        protectPlayerBed(player, returnPos);
-
-        // ИЗМЕНЕНО (мультиплеер): лидер генерирует мир и выбирает точку спавна, присоединяющийся
-        // копирует уже готовые координаты из GroupInfo и спавнится рядом с лидером
-        BlockPos spawnPos;
-        SharedDreamSession.GroupInfo groupInfo = SharedDreamSession.getGroup(groupId);
-
-        if (isLeader) {
-            // ДОБАВЛЕНО ("повторно попадаешь в сон — он не сбрасывается"): полный сброс
-            // локации от прошлого захода ДО любой генерации/постройки
-            resetDreamForNewSession(dreamWorld, dream.id(), groupId);
-
-            // Лидер: генерируем мир сна и выбираем точку спавна
-            spawnPos = findDreamSpawn(dreamWorld);
-
-            // ДОБАВЛЕНО (сон "Зеркальная комната"): создаём комнату ПЕРЕД телепортацией и корректируем spawnPos
-            // ИЗМЕНЕНО: используем groupId вместо player.getUuid() для ключа общего стейта
-            if (dream.id().equals(SomniumMod.id("mirror_room"))) {
-                spawnPos = setupMirrorRoomAndGetPlayerSpawn(dreamWorld, spawnPos, groupId);
-            }
-
-            // ДОБАВЛЕНО (сон "Обрушающаяся шахта"): создаём процедурный лабиринт ПЕРЕД телепортацией
-            // ИЗМЕНЕНО: используем groupId вместо player.getUuid() для ключа общего стейта
-            if (dream.id().equals(SomniumMod.id("collapsing_mine"))) {
-                spawnPos = setupCollapsingMineAndGetPlayerSpawn(dreamWorld, spawnPos, groupId);
-            }
-
-            // Сохраняем точку спавна в GroupInfo для присоединяющихся игроков
-            if (groupInfo != null) {
-                groupInfo.sharedSpawn = spawnPos;
-            }
-        } else {
-            // Присоединяющийся: пропускаем генерацию, спавнимся рядом с лидером
-            if (groupInfo == null || groupInfo.sharedSpawn == null) {
-                SomniumMod.LOGGER.error("[Somnium] Игрок {} пытается присоединиться к группе {}, но точка спавна не найдена!",
-                        player.getName().getString(), groupId);
-                // Fallback: генерируем свою точку
-                spawnPos = findDreamSpawn(dreamWorld);
-            } else {
-                // Спавн рядом с лидером (в радиусе 3-5 блоков)
-                double angle = RANDOM.nextDouble() * Math.PI * 2;
-                double dist = 3.0 + RANDOM.nextDouble() * 2.0;
-                int offsetX = (int) Math.round(Math.cos(angle) * dist);
-                int offsetZ = (int) Math.round(Math.sin(angle) * dist);
-                spawnPos = groupInfo.sharedSpawn.add(offsetX, 0, offsetZ);
-                SomniumMod.LOGGER.info("[Somnium] Игрок {} присоединяется к группе {} в точке {}",
-                        player.getName().getString(), groupId, spawnPos);
-            }
-        }
-
-        // ДОБАВЛЕНО (сон "Сон-в-сне"): копируем чанк вокруг игрока из реального мира
-        // ИЗМЕНЕНО: только лидер выполняет генерацию, присоединяющийся пропускает
-        if (isLeader && dream.id().equals(SomniumMod.id("dream_within_dream"))) {
-            BlockPos realWorldPos = player.getBlockPos();
-            ServerWorld realWorld = (ServerWorld) player.getEntityWorld();
-
-            // Сохраняем реальную позицию игрока
-            DREAM_WITHIN_DREAM_ORIGINAL_POS.put(player.getUuid(), realWorldPos);
-
-            // Копируем время суток и погоду из реального мира
-            long realTimeOfDay = realWorld.getTimeOfDay();
-            boolean isRaining = realWorld.isRaining();
-            boolean isThundering = realWorld.isThundering();
-
-            // Сохраняем погоду реального мира для последующего восстановления
-            DREAM_WITHIN_DREAM_ORIGINAL_WEATHER.put(player.getUuid(),
-                new WeatherSnapshot(realTimeOfDay, isRaining, isThundering));
-
-            // Копируем чанк (32 чанка = 128x128) вокруг игрока
-            ChunkSnapshot snapshot = captureChunk(realWorld, realWorldPos);
-            DREAM_WITHIN_DREAM_CHUNKS.put(player.getUuid(), snapshot);
-
-            // Воссоздаём скопированный чанк в измерении сна
-            spawnPos = recreateChunkInDream(dreamWorld, snapshot, realWorldPos);
-
-            // Применяем ту же погоду и время суток, что и в реальном мире
-            dreamWorld.setTimeOfDay(realTimeOfDay);
-            if (isRaining || isThundering) {
-                dreamWorld.setWeather(0, 6000, isRaining, isThundering);
-            } else {
-                dreamWorld.setWeather(6000, 0, false, false);
-            }
-
-            SomniumMod.LOGGER.info("[Dream Within Dream] Скопирован чанк из реального мира для игрока {} (время: {}, дождь: {}, гроза: {})",
-                player.getName().getString(), realTimeOfDay, isRaining, isThundering);
-        }
-
-        // Останавливаем ванильное "лежание в кровати" перед сменой измерения — иначе
-        // клиент может остаться в анимации сна на новом месте.
-        if (player.isSleeping()) {
-            player.wakeUp();
-        }
-
-        player.teleport(dreamWorld, spawnPos.getX() + 0.5, spawnPos.getY(), spawnPos.getZ() + 0.5,
-                player.getYaw(), player.getPitch());
-
-        // ДОБАВЛЕНО (мультиплеер): создаём спящее тело в реальном мире
-        // ИСПРАВЛЕНО: ActiveDream ("active") на этом этапе ещё не создан — используем
-        // returnDimension/returnPos, зафиксированные выше ДО телепортации.
-        ServerWorld returnWorld = server.getWorld(returnDimension);
-        if (returnWorld != null) {
-            spawnSleepingBody(player, returnWorld, returnPos);
-        }
-
-        // Сбрасываем накопленную дистанцию падения и даём короткое окно неуязвимости —
-        // см. комментарий у LANDING_IMMUNITY_UNTIL.
-        player.fallDistance = 0;
-        player.setVelocity(0, 0, 0);
-        grantLandingImmunity(player);
-
-        // ДОБАВЛЕНО (негативные эффекты во время сна): накладываем дебаффы, чтобы сон ощущался
-        // как кошмар. ИЗМЕНЕНО: каждый сон теперь имеет свой уникальный набор эффектов,
-        // подходящий под его тематику (водные эффекты для Тонущего города, слепота для Шахты и т.д.)
-        // ИСКЛЮЧЕНИЕ: "Сон-в-сне" не получает эффектов — должен выглядеть как реальность
-        if (!dream.id().equals(SomniumMod.id("dream_within_dream"))) {
-            applyDreamDebuffs(player, dream.id(), dream.durationTicks());
-        }
-
-        // ИЗМЕНЕНО ("убери сверху название сна и цель сна"): разовый тайтл на весь экран
-        // и тексты в верхнем HUD убраны — название и цель сна отправляются в чат, где их
-        // всегда можно перечитать; на экране остаётся только тонкая полоса времени сна
-        // (см. DreamObjectiveHudRenderer).
-        // ИСКЛЮЧЕНИЕ: "Сон-в-сне" не показывает ничего — скрывает, что это сон
-        if (!dream.id().equals(SomniumMod.id("dream_within_dream"))) {
-            player.sendMessage(net.minecraft.text.Text.translatable(dream.displayNameKey())
-                    .formatted(net.minecraft.util.Formatting.RED, net.minecraft.util.Formatting.BOLD), false);
-            player.sendMessage(net.minecraft.text.Text.translatable("somnium.dream.objective", dream.objective())
-                    .formatted(net.minecraft.util.Formatting.GRAY), false);
-            DreamHudPayload.sendActive(player, dream.displayNameKey(), dream.objective(),
-                    (int) dream.durationTicks(), (int) dream.durationTicks());
-            // ДОБАВЛЕНО: звук входа в сон (но не для dream_within_dream - там должна быть тишина)
-            player.playSound(
-                    com.somnium.mod.registry.ModSounds.DREAM_ENTER,
-                    1.0f,
-                    0.7f);
-        }
-
-        // ИЗМЕНЕНО (мультиплеер): лидер создаёт монстров и объекты сна, присоединяющийся копирует
-        // ссылки на общие объекты (doorPos, bossUuid) из GroupInfo
-        UUID bossUuid;
-        BlockPos doorPos;
-
-        if (isLeader) {
-            // Лидер: спавним монстров и создаём объекты сна
-            // ИЗМЕНЕНО: используем groupId вместо player.getUuid() для ключа общего стейта
-            bossUuid = spawnDreamMonsters(dreamWorld, spawnPos, dream, groupId);
-
-            // ДОБАВЛЕНО (сон "Лестница в никуда", редизайн "Падающих досок"): подъезд многоэтажки
-            // над пустотой — марши достраиваются вверх по мере подъёма игрока.
-            // ИЗМЕНЕНО: используем groupId вместо player.getUuid() для ключа общего стейта
-            if (dream.id().equals(SomniumMod.id("falling_planks"))) {
-                setupStairwell(dreamWorld, spawnPos, groupId);
-            }
-
-            // ДОБАВЛЕНО (выход из "Тонущего города"): затопленный собор с колоколом
-            // на вершине — воздушный карман над максимальным уровнем воды.
-            if (dream.id().equals(SomniumMod.id("drowning_city"))) {
-                setupDrowningCityCathedral(dreamWorld, spawnPos, groupId);
-                showHint(player, "§bНад городом возвышается затопленный собор — доберись до колокола на его вершине! "
-                    + "Собор светится в темноте (вход с любой стороны), а внутри — лестница наверх, без паркура.", 12);
-            }
-
-            // ДОБАВЛЕНО (сон "Кровавый пир", новая механика): пиршественный стол перед игроком
-            // ИЗМЕНЕНО: используем groupId вместо player.getUuid() для ключа общего стейта
-            if (dream.id().equals(SomniumMod.id("crimson_feast"))) {
-                setupCrimsonFeastTable(dreamWorld, spawnPos, groupId);
-            }
-
-            // ДОБАВЛЕНО ("задание сна нельзя выполнить"): раньше цель сна была только текстом в HUD —
-            // ничего в коде её не отслеживало, поэтому единственным способом закончить сон было
-            // дождаться таймаута или умереть. Теперь при входе в сон реально готовится то, что нужно
-            // проверить/собрать/победить, а UUID/координата цели сохраняются в ActiveDream ниже.
-            // ИЗМЕНЕНО: некоторые сны (например, falling_planks) не имеют цели (objectiveType == null)
-            // и завершаются только по таймауту или смерти - для них не спавним маркеры.
-            doorPos = null;
-            if (dream.objectiveType() == DreamObjectiveType.REACH_DOOR) {
-                // ДОБАВЛЕНО: для лабиринта шахты используем позицию из генератора
-                // ИЗМЕНЕНО: используем groupId вместо player.getUuid() для ключа общего стейта
-                if (dream.id().equals(SomniumMod.id("collapsing_mine"))) {
-                    MazeGenerator maze = COLLAPSING_MINE_MAZES.get(groupId);
-                    BlockPos origin = COLLAPSING_MINE_ORIGINS.get(groupId);
-                    if (maze != null && origin != null) {
-                        // ИСПРАВЛЕНО: baseY прибавляется к origin.y — передаём 0, иначе дверь
-                        // оказывалась над лабиринтом (удвоенная высота), а не на его полу
-                        doorPos = maze.findExitPosition(spawnPos, origin, 0);
-                    }
-                } else {
-                    doorPos = findObjectivePoint(dreamWorld, spawnPos);
-                }
-                spawnWakeDoorMarker(dreamWorld, doorPos);
-                // ДОБАВЛЕНО: инициализируем трекер двери для этого игрока
-                WakeDoorTracker.onDreamStart(player.getUuid());
-
-                // ДОБАВЛЕНО ("в шахте-лабиринте нужен компас, ведущий к выходу"):
-                // лоудстоун-компас, привязанный к двери выхода в этом измерении
-                if (dream.id().equals(SomniumMod.id("collapsing_mine")) && doorPos != null) {
-                    giveMineCompass(player, dreamWorld, doorPos);
-                    showHint(player, "§bКомпас Выхода у тебя в инвентаре — стрелка указывает на дверь из шахты.", 9);
-                }
-            } else if (dream.objectiveType() == DreamObjectiveType.COLLECT_ITEMS) {
-                spawnCollectibleItems(dreamWorld, spawnPos, dream.objectiveTargetId(), dream.objectiveCount());
-            }
-
-            // Сохраняем общие объекты в GroupInfo для присоединяющихся игроков
-            if (groupInfo != null) {
-                groupInfo.doorPos = doorPos;
-                groupInfo.bossTargetUuid = bossUuid;
-            }
-        } else {
-            // Присоединяющийся: пропускаем спавн монстров и создание объектов, копируем ссылки из GroupInfo
-            if (groupInfo != null) {
-                bossUuid = groupInfo.bossTargetUuid;
-                doorPos = groupInfo.doorPos;
-                // Инициализируем трекер двери для присоединившегося игрока, если цель — REACH_DOOR
-                if (dream.objectiveType() == DreamObjectiveType.REACH_DOOR) {
-                    WakeDoorTracker.onDreamStart(player.getUuid());
-                    // Присоединившийся к шахте тоже получает свой Компас Выхода
-                    if (dream.id().equals(SomniumMod.id("collapsing_mine")) && doorPos != null) {
-                        giveMineCompass(player, dreamWorld, doorPos);
-                    }
-                }
-                // Присоединившийся к Тонущему городу — та же подсказка про колокол собора
-                if (dream.id().equals(SomniumMod.id("drowning_city"))) {
-                    showHint(player, "§bНад городом возвышается затопленный собор — доберись до колокола на его вершине! "
-                        + "Собор светится в темноте (вход с любой стороны), а внутри — лестница наверх, без паркура.", 12);
-                }
-            } else {
-                SomniumMod.LOGGER.warn("[Somnium] Игрок {} присоединяется к группе {}, но GroupInfo не найдена!",
-                        player.getName().getString(), groupId);
-                bossUuid = null;
-                doorPos = null;
-            }
-        }
-
-        ACTIVE.put(player.getUuid(), new ActiveDream(
-                dream.id(),
-                returnDimension,
-                returnPos,
-                server.getTicks(),
-                dream.durationTicks(),
-                dream.objective(),
-                savedInventory,
-                savedHealth,
-                savedFoodLevel,
-                savedSaturation,
-                dream.objectiveType(),
-                doorPos,
-                bossUuid,
-                dream.objectiveType() == DreamObjectiveType.COLLECT_ITEMS ? dream.objectiveTargetId() : null,
-                dream.objectiveCount()
-        ));
-
-        // УСТАРЕЛО: регистрация в сеансе сна теперь выполняется через SharedDreamSession.createGroup/joinGroup
-        // которые уже были вызваны в enterDream() — этот вызов больше не нужен
-        // SharedDreamSession.joinSession(player.getUuid(), dream.id());
-
-        // ИСПРАВЛЕНО (сон "Зеркальная комната"): устанавливаем позицию стекла с задержкой
-        // Делаем это ПОСЛЕ добавления в ACTIVE, через 10 тиков когда моб точно загружен
-        // ИЗМЕНЕНО (мультиплеер): только лидер инициализирует зеркало, присоединяющиеся его пропускают
-        if (isLeader && dream.id().equals(SomniumMod.id("mirror_room")) && bossUuid != null) {
-            UUID finalBossUuid = bossUuid;
-            UUID finalPlayerId = player.getUuid();
-            // Сохраняем запрос на инициализацию в очередь, обработка в tickActiveDreams()
-            PENDING_MIRROR_INIT.put(finalPlayerId, new MirrorInitData(finalBossUuid, 10));
-        }
-
-        // ДОБАВЛЕНО (сон "Тонущий город"): инициализируем начальный уровень воды и включаем дождь
-        // ИЗМЕНЕНО (мультиплеер): используем groupId вместо player.getUuid() для ключа общего стейта,
-        // но только лидер инициализирует начальный уровень воды — присоединяющиеся копируют текущий уровень
-        if (dream.id().equals(SomniumMod.id("drowning_city"))) {
-            if (isLeader) {
-                DROWNING_CITY_WATER_LEVEL.put(groupId, DROWNING_CITY_START_Y);
-                // Принудительно включаем дождь для атмосферы затопления
-                dreamWorld.setWeather(0, 999999, true, false); // clearDuration=0, rainDuration=999999, raining=true, thundering=false
-            }
-            // Присоединяющиеся видят текущий уровень воды из общего стейта (уже в карте по groupId)
-        }
-
-        // TODO (Приоритет 2): заспавнить/сгенерировать саму структуру локации сна (dream.structureTemplate()),
-        // если это не "PROCEDURAL" — например, вставить заранее собранный NBT-шаблон вокруг spawnPos.
-        // Сейчас локация целиком берётся из плейсхолдер-генератора измерения (data/somnium/dimension/*.json).
+    private static boolean isLegacySleepingBody(ArmorStandEntity stand) {
+        Text name = stand.getCustomName();
+        return name != null && stand.isInvisible()
+                && name.getContent() instanceof TranslatableTextContent content
+                && content.getKey().equals("somnium.dream.sleeping_body");
     }
 
-    /**
-     * Спавнит начальный набор монстров сна вокруг точки входа игрока.
-     * Количество: 1 экземпляр каждого типа монстра, перечисленного в dream.monsterEntityIds(),
-     * плюс дополнительный "довесок" для снов с одним типом монстра, чтобы не было слишком пусто.
-     *
-     * ИЗМЕНЕНО (мультиплеер): теперь принимает sessionKey (groupId) вместо playerId для доступа
-     * к общему стейту сна (лабиринты, комнаты и т.д.)
-     *
-     * @param sessionKey UUID группы общего сна (groupId) — ключ для доступа к per-dream картам
-     * @return UUID гарантированно заспавненного "боя цели" для DreamObjectiveType.BOSS_KILL,
-     *         или null, если у этого сна нет цели типа "победить конкретную сущность".
-     */
-    private static UUID spawnDreamMonsters(ServerWorld world, BlockPos center, DreamType dream, UUID sessionKey) {
-        var monsterIds = dream.monsterEntityIds();
-        if (monsterIds.isEmpty()) return null;
-
-        boolean isBossDream = dream.objectiveType() == DreamObjectiveType.BOSS_KILL
-                && dream.objectiveTargetId() != null;
-
-        // ДОБАВЛЕНО (сон "Зеркальная комната"): специальный спавн для зеркального двойника
-        boolean isMirrorRoom = dream.id().equals(SomniumMod.id("mirror_room"));
-
-        // ДОБАВЛЕНО (сон "Обрушающаяся шахта"): специальный спавн монстров в лабиринте
-        boolean isCollapsingMine = dream.id().equals(SomniumMod.id("collapsing_mine"));
-
-        UUID bossUuid = null;
-        if (isBossDream) {
-            // ИСПРАВЛЕНИЕ (боевой баг): раньше сны с одним типом монстра ("монокошмарные") всегда
-            // получали +2 "довеска" (extrasForSingleMonsterDreams ниже) — из-за этого, например,
-            // "Сон-в-сне" реально спавнил ТРИ Кошмара-Амальгамы одновременно, хотя это уникальный
-            // босс, а цель "Победить Кошмар" в единственном числе. Теперь для целей BOSS_KILL
-            // спавнится ровно один гарантированный экземпляр-цель — ближе к игроку, чтобы бой
-            // не превращался в беготню по всей платформе, — а его UUID запоминается для проверки
-            // в tickActiveDreams().
-            BlockPos bossSpawnPos;
-            if (isMirrorRoom) {
-                // ИСПРАВЛЕНИЕ: Зеркальный двойник спавнится строго на противоположной стороне комнаты
-                // (X=7 от угла комнаты), за стеклянной стеной, а не в случайном месте
-                // ИЗМЕНЕНО: используем sessionKey вместо playerId для доступа к общему стейту
-                bossSpawnPos = getMirrorMonsterSpawnPos(center, sessionKey);
-            } else {
-                bossSpawnPos = randomRingPosition(world, center, BOSS_SPAWN_MIN_RADIUS, BOSS_SPAWN_MAX_RADIUS);
-            }
-            var boss = spawnOneAt(world, dream.objectiveTargetId(), bossSpawnPos);
-            if (boss != null) bossUuid = boss.getUuid();
+    private static void flushDiscards() {
+        if (PENDING_DISCARD.isEmpty()) return;
+        for (Entity entity : PENDING_DISCARD) {
+            if (!entity.isRemoved()) entity.discard();
         }
-
-        // ДОБАВЛЕНО: для лабиринта используем специальный спавн в случайных ячейках
-        if (isCollapsingMine) {
-            MazeGenerator maze = COLLAPSING_MINE_MAZES.get(sessionKey);
-            BlockPos origin = COLLAPSING_MINE_ORIGINS.get(sessionKey);
-            if (maze != null && origin != null) {
-                // Спавним больше монстров в лабиринте - по 3-4 каждого типа
-                int monstersPerType = 4;
-                for (Identifier entityId : monsterIds) {
-                    // ИСПРАВЛЕНО: baseY прибавляется к origin.y — передаём 0, иначе мобы
-                    // появлялись на удвоенной высоте над лабиринтом и не попадали в него
-                    List<BlockPos> spawnPositions = maze.findMonsterSpawnPositions(origin, 0, monstersPerType);
-                    for (BlockPos pos : spawnPositions) {
-                        spawnOneAt(world, entityId, pos);
-                    }
-                }
-                // ДОБАВЛЕНО ("в шахте-лабиринте нету нового моба"): лабиринт огромный
-                // (123×123 блока), 4 шахтёра в случайных ячейках легко не встретить за
-                // весь сон. Дополнительно спавним одного Кричащего Шахтёра в 10-16 блоках
-                // от старта игрока — встреча гарантирована почти сразу.
-                for (int attempt = 0; attempt < 24; attempt++) {
-                    double ang = RANDOM.nextDouble() * Math.PI * 2;
-                    int dist = 10 + RANDOM.nextInt(7);
-                    BlockPos near = center.add((int) Math.round(Math.cos(ang) * dist), 0,
-                            (int) Math.round(Math.sin(ang) * dist));
-                    if (world.getBlockState(near).isAir() && world.getBlockState(near.up()).isAir()
-                            && !world.getBlockState(near.down()).isAir()) {
-                        spawnOneAt(world, SomniumMod.id("screaming_miner"), near);
-                        break;
-                    }
-                }
-            }
-        } else {
-            int extrasForSingleMonsterDreams = (monsterIds.size() == 1 && !isBossDream) ? 2 : 0;
-
-            for (Identifier entityId : monsterIds) {
-                if (isBossDream && entityId.equals(dream.objectiveTargetId())) continue; // уже заспавнен как босс выше
-                spawnOne(world, center, entityId, MONSTER_SPAWN_MIN_RADIUS, MONSTER_SPAWN_MAX_RADIUS);
-                for (int i = 0; i < extrasForSingleMonsterDreams; i++) {
-                    spawnOne(world, center, entityId, MONSTER_SPAWN_MIN_RADIUS, MONSTER_SPAWN_MAX_RADIUS);
-                }
-            }
-        }
-        return bossUuid;
+        PENDING_DISCARD.clear();
     }
 
-    private static MobEntity spawnOne(ServerWorld world, BlockPos center, Identifier entityId, double minRadius, double maxRadius) {
-        // ВАЖНО: Registries.ENTITY_TYPE — DefaultedRegistry с дефолтом "minecraft:pig".
-        // Обычный .get(id) НИКОГДА не возвращает null для незарегистрированного id — он молча
-        // отдаёт свинью, и предупреждение ниже просто не срабатывало (баг: монстры сна тихо
-        // подменялись свиньями либо не подменялись вовсе, если совпадение было случайным).
-        // getOptionalValue(id) — единственный надёжный способ проверить, что сущность реально
-        // зарегистрирована в ModEntities, вместо .get(), который на DefaultedRegistry тихо
-        // возвращает дефолт (см. комментарий выше).
-        var maybeType = Registries.ENTITY_TYPE.getOrEmpty(entityId);
-        if (maybeType.isEmpty()) {
-            SomniumMod.LOGGER.warn("[Somnium] Неизвестная сущность монстра сна: {} (не зарегистрирована в ModEntities)", entityId);
-            return null;
-        }
-        EntityType<?> type = maybeType.get();
+    // =====================================================================
+    // Тело в кровати и защита кровати
+    // =====================================================================
 
-        BlockPos pos = randomRingPosition(world, center, minRadius, maxRadius);
-        var entity = type.create(world);
-        if (entity instanceof MobEntity mob) {
-            mob.refreshPositionAndAngles(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, RANDOM.nextFloat() * 360f, 0);
-
-            // ИСПРАВЛЕНИЕ (сон mirror_room): специальная инициализация для MirrorReflectionEntity
-            if (mob instanceof com.somnium.mod.entity.nightmare.MirrorReflectionEntity mirrorEntity) {
-                // Находим ближайшего игрока для установки цели зеркального двойника
-                var nearestPlayer = world.getClosestPlayer(
-                    mob.getX(), mob.getY(), mob.getZ(),
-                    100.0, // радиус поиска
-                    false
-                );
-                if (nearestPlayer instanceof ServerPlayerEntity serverPlayer) {
-                    mirrorEntity.setTargetPlayer(serverPlayer);
-                    // НЕ устанавливаем позицию зеркала здесь - она будет установлена после
-                    // в enterDreamWithType() с правильными абсолютными координатами стекла
-                }
-            }
-
-            world.spawnEntity(mob);
-            return mob;
-        }
-        return null;
+    private static void protectBed(Participant participant, ServerPlayerEntity player) {
+        BlockPos bed = participant.snapshot.bedPos;
+        if (bed == null) return;
+        BlockState state = player.getWorld().getBlockState(bed);
+        if (!(state.getBlock() instanceof BedBlock)) return;
+        participant.bedBlocks.add(bed);
+        participant.bedBlocks.add(state.get(BedBlock.PART) == BedPart.HEAD
+                ? bed.offset(state.get(BedBlock.FACING).getOpposite())
+                : bed.offset(state.get(BedBlock.FACING)));
     }
 
-    /** Спавнит монстра на конкретной позиции (для зеркальной комнаты) */
-    private static MobEntity spawnOneAt(ServerWorld world, Identifier entityId, BlockPos pos) {
-        var maybeType = Registries.ENTITY_TYPE.getOrEmpty(entityId);
-        if (maybeType.isEmpty()) {
-            SomniumMod.LOGGER.warn("[Somnium] Неизвестная сущность монстра сна: {} (не зарегистрирована в ModEntities)", entityId);
-            return null;
-        }
-        EntityType<?> type = maybeType.get();
-
-        var entity = type.create(world);
-        if (entity instanceof MobEntity mob) {
-            mob.refreshPositionAndAngles(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, RANDOM.nextFloat() * 360f, 0);
-
-            // УБРАНО: не устанавливаем mirrorPlane здесь - будет установлен позже с правильными координатами
-
-            world.spawnEntity(mob);
-            return mob;
-        }
-        return null;
-    }
-
-    /** Случайная позиция в кольце вокруг центра, на известной высоте плейсхолдер-платформы мира сна. */
-    private static BlockPos randomRingPosition(ServerWorld world, BlockPos center, double minRadius, double maxRadius) {
-        double angle = RANDOM.nextDouble() * Math.PI * 2;
-        double dist = minRadius + RANDOM.nextDouble() * (maxRadius - minRadius);
-        int x = center.getX() + (int) Math.round(Math.cos(angle) * dist);
-        int z = center.getZ() + (int) Math.round(Math.sin(angle) * dist);
-        // ИСПРАВЛЕНИЕ (та же причина, что и в findDreamSpawn/ModDimensions#platformSurfaceY):
-        // world.getTopY(...) не гарантированно готов для ещё не подгруженных дальних чанков —
-        // используем ту же арифметически известную высоту плейсхолдер-платформы, а не хайтмап.
-        int y = ModDimensions.platformSurfaceY(world.getRegistryKey());
-        return new BlockPos(x, y, z);
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Лес теней", новый выход): Дерево-Маяк — мёртвое дерево из тёмного дуба
-     * со светящимся "сердцем" и фонарями душ. Заменяет Дверь пробуждения только для этого сна:
-     * выход — не пройти сквозь объект, а ПРОСТОЯТЬ в свете дерева, пока идёт канал
-     * (см. tickShadowForest, BEACON_TREE_CHANNEL_*).
-     */
-    private static void buildBeaconTree(ServerWorld world, BlockPos pos) {
-        // Ствол из тёмного дуба, 5 блоков
-        for (int dy = 0; dy <= 4; dy++) {
-            world.setBlockState(pos.up(dy), net.minecraft.block.Blocks.DARK_OAK_LOG.getDefaultState());
-        }
-        // Светящееся "сердце" на вершине — маяк, видимый сквозь темноту леса издалека
-        world.setBlockState(pos.up(5), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
-        // Ветви на высоте 4 и подвесные фонари душ под их концами
-        BlockPos[] branches = { pos.add(1, 4, 0), pos.add(-1, 4, 0), pos.add(0, 4, 1), pos.add(0, 4, -1) };
-        for (BlockPos branch : branches) {
-            world.setBlockState(branch, net.minecraft.block.Blocks.DARK_OAK_LOG.getDefaultState());
-            world.setBlockState(branch.down(), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState()
-                    .with(net.minecraft.block.LanternBlock.HANGING, true));
-        }
-        // Кольцо фонарей душ у подножия — видимая граница "света дерева"
-        world.setBlockState(pos.add(2, 0, 2), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
-        world.setBlockState(pos.add(-2, 0, 2), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
-        world.setBlockState(pos.add(2, 0, -2), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
-        world.setBlockState(pos.add(-2, 0, -2), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
-
-        // Имя над деревом (невидимый стенд, как у двери) — видно издалека
-        ArmorStandEntity marker = new ArmorStandEntity(world, pos.getX() + 0.5, pos.getY() + 6.5, pos.getZ() + 0.5);
-        marker.setInvisible(true);
-        marker.setInvulnerable(true);
-        marker.setNoGravity(true);
-        marker.setCustomName(net.minecraft.text.Text.literal("§b§lДерево-Маяк"));
-        marker.setCustomNameVisible(true);
-        world.spawnEntity(marker);
-    }
-
-    /**
-     * Точка цели REACH_DOOR — дальше от игрока, чем обычные монстры, чтобы до неё нужно было
-     * дойти/добежать через локацию сна, а не оказаться рядом сразу же.
-     */
-    private static BlockPos findObjectivePoint(ServerWorld world, BlockPos center) {
-        return randomRingPosition(world, center, DOOR_MIN_RADIUS, DOOR_MAX_RADIUS);
-    }
-
-    /**
-     * ИЗМЕНЕНО: вместо невидимого маркера теперь ставится настоящая белая берёзовая дверь,
-     * которую нужно открыть и пройти сквозь неё. Дверь окружена светящимися блоками для видимости.
-     */
-    /**
-     * ДОБАВЛЕНО ("компас к выходу в шахте"): выдаёт лоудстоун-компас, навсегда привязанный
-     * к двери выхода. LodestoneTracked=false — стрелка не крутится, даже если рядом нет
-     * магнетита; привязка к измерению сна — в реальном мире крутится бесцельно.
-     * Исчезает при пробуждении вместе со всем сонным инвентарём.
-     */
-    private static void giveMineCompass(ServerPlayerEntity player, ServerWorld world, BlockPos exitPos) {
-        ItemStack compass = new ItemStack(net.minecraft.item.Items.COMPASS);
-        var nbt = compass.getOrCreateNbt();
-        nbt.putBoolean("LodestoneTracked", false);
-        nbt.putString("LodestoneDimension", world.getRegistryKey().getValue().toString());
-        var posNbt = new net.minecraft.nbt.NbtCompound();
-        posNbt.putInt("X", exitPos.getX());
-        posNbt.putInt("Y", exitPos.getY());
-        posNbt.putInt("Z", exitPos.getZ());
-        nbt.put("LodestonePos", posNbt);
-        compass.setCustomName(net.minecraft.text.Text.literal("§bКомпас Выхода"));
-        player.getInventory().offerOrDrop(compass);
-    }
-
-    private static void spawnWakeDoorMarker(ServerWorld world, BlockPos pos) {
-        // Ставим фундамент из гладкого кварца (красивая белая платформа)
-        for (int x = -1; x <= 1; x++) {
-            for (int z = -1; z <= 1; z++) {
-                BlockPos basePos = pos.add(x, -1, z);
-                world.setBlockState(basePos, net.minecraft.block.Blocks.SMOOTH_QUARTZ.getDefaultState());
-            }
-        }
-
-        // Ставим нижнюю половину берёзовой двери (белая)
-        net.minecraft.block.DoorBlock doorBlock = (net.minecraft.block.DoorBlock) net.minecraft.block.Blocks.BIRCH_DOOR;
-        world.setBlockState(pos, doorBlock.getDefaultState()
-                .with(net.minecraft.block.DoorBlock.FACING, net.minecraft.util.math.Direction.NORTH)
-                .with(net.minecraft.block.DoorBlock.HALF, net.minecraft.block.enums.DoubleBlockHalf.LOWER));
-
-        // Ставим верхнюю половину двери
-        world.setBlockState(pos.up(), doorBlock.getDefaultState()
-                .with(net.minecraft.block.DoorBlock.FACING, net.minecraft.util.math.Direction.NORTH)
-                .with(net.minecraft.block.DoorBlock.HALF, net.minecraft.block.enums.DoubleBlockHalf.UPPER));
-
-        // Рамка вокруг двери из светящихся блоков (sea lantern - яркие белые блоки)
-        world.setBlockState(pos.add(-1, 0, 0), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
-        world.setBlockState(pos.add(1, 0, 0), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
-        world.setBlockState(pos.add(-1, 1, 0), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
-        world.setBlockState(pos.add(1, 1, 0), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
-        world.setBlockState(pos.add(-1, 2, 0), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
-        world.setBlockState(pos.add(0, 2, 0), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
-        world.setBlockState(pos.add(1, 2, 0), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
-
-        // Невидимый маркер над дверью для имени (чтобы игрок видел название издалека)
-        ArmorStandEntity marker = new ArmorStandEntity(world, pos.getX() + 0.5, pos.getY() + 2.5, pos.getZ() + 0.5);
-        marker.setInvisible(true);
-        marker.setInvulnerable(true);
-        marker.setNoGravity(true);
-        marker.setCustomName(net.minecraft.text.Text.translatable("somnium.dream.wake_door")
-                .copy().formatted(net.minecraft.util.Formatting.WHITE, net.minecraft.util.Formatting.BOLD));
-        marker.setCustomNameVisible(true);
-        world.spawnEntity(marker);
-    }
-
-    /**
-     * Раскидывает objectiveCount экземпляров предмета objectiveItemId вокруг точки спавна сна —
-     * помечены setNeverDespawn(), чтобы не исчезли раньше, чем игрок успеет их найти (таймауты
-     * снов могут быть длиннее стандартного времени жизни предмета на земле).
-     */
-    private static void spawnCollectibleItems(ServerWorld world, BlockPos center, Identifier itemId, int count) {
-        if (itemId == null || count <= 0) return;
-        var maybeItem = Registries.ITEM.getOrEmpty(itemId);
-        if (maybeItem.isEmpty()) {
-            SomniumMod.LOGGER.warn("[Somnium] Неизвестный предмет для сбора в сне: {}", itemId);
-            return;
-        }
-        var item = maybeItem.get();
-        for (int i = 0; i < count; i++) {
-            BlockPos pos = randomRingPosition(world, center, COLLECT_ITEM_MIN_RADIUS, COLLECT_ITEM_MAX_RADIUS);
-            ItemEntity itemEntity = new ItemEntity(world, pos.getX() + 0.5, pos.getY() + 0.2, pos.getZ() + 0.5,
-                    new ItemStack(item));
-            itemEntity.setNeverDespawn();
-            world.spawnEntity(itemEntity);
-        }
-    }
-
-    /**
-     * Вызывается тик-обработчиком, если у игрока есть активный сон — проверяет таймаут.
-     *
-     * ПОПУТНОЕ ИСПРАВЛЕНИЕ: раньше здесь был ACTIVE.forEach(...), а wake() внутри лямбды сам
-     * удаляет запись из этой же ACTIVE — то есть при любом естественном завершении сна по
-     * таймауту сервер падал с ConcurrentModificationException (HashMap не переживает удаление
-     * элемента во время forEach по нему же). Раз этот путь теперь ещё и отвечает за восстановление
-     * инвентаря и скип ночи, крашиться он точно не должен — итерируемся по СНИМКУ ключей.
-     */
-    public static void tickActiveDreams(MinecraftServer server) {
-        // ИСПРАВЛЕНИЕ: обрабатываем отложенную инициализацию зеркальных отражений
-        if (!PENDING_MIRROR_INIT.isEmpty()) {
-            for (UUID playerId : new ArrayList<>(PENDING_MIRROR_INIT.keySet())) {
-                MirrorInitData initData = PENDING_MIRROR_INIT.get(playerId);
-                if (initData == null) continue;
-
-                if (initData.ticksRemaining <= 0) {
-                    // Время инициализировать зеркало
-                    ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
-                    if (player != null && player.getEntityWorld() instanceof ServerWorld dreamWorld) {
-                        BlockPos roomCorner = MIRROR_ROOM_CORNER.get(playerId);
-                        if (roomCorner != null) {
-                            int middleX = 30 / 2; // 15 - центр комнаты (где стекло)
-                            int centerZ = 30 / 2; // 15 - центр по Z
-                            BlockPos glassPlanePos = roomCorner.add(middleX, 0, centerZ);
-
-                            // Ищем моба по UUID
-                            var mobEntity = dreamWorld.getEntity(initData.bossUuid);
-                            if (mobEntity instanceof com.somnium.mod.entity.nightmare.MirrorReflectionEntity mirrorMob) {
-                                mirrorMob.setMirrorPlane(glassPlanePos);
-                                mirrorMob.setTargetPlayer(player);
-                                SomniumMod.LOGGER.info("[Somnium] MirrorReflection initialized: mirror at {}, player at {}, mob at {}",
-                                    glassPlanePos, player.getBlockPos(), mirrorMob.getBlockPos());
-                            } else {
-                                SomniumMod.LOGGER.warn("[Somnium] Failed to find MirrorReflection entity with UUID {}", initData.bossUuid);
-                            }
-                        }
-                    }
-                    PENDING_MIRROR_INIT.remove(playerId);
-                } else {
-                    // Уменьшаем счетчик тиков
-                    PENDING_MIRROR_INIT.put(playerId, new MirrorInitData(initData.bossUuid, initData.ticksRemaining - 1));
-                }
-            }
-        }
-
-        if (ACTIVE.isEmpty()) return;
-        for (UUID uuid : new ArrayList<>(ACTIVE.keySet())) {
-            ActiveDream active = ACTIVE.get(uuid);
-            if (active == null) continue; // уже проснулся в этом же тике по другой причине
-
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(uuid);
-            if (player == null) continue;
-
-            // ДОБАВЛЕНО ("задание сна нельзя выполнить"): проверяем выполнение реальной цели
-            // ДО проверки таймаута — если игрок успел выполнить условие в тот же тик, когда
-            // истекает время, засчитываем именно успех (лучшая награда), а не простое "пережил".
-            if (isObjectiveComplete(player, active)) {
-                SomniumMod.LOGGER.info("[Dream Tick] Цель сна {} выполнена игроком {}", active.dreamId(), player.getName().getString());
-                wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
-                continue;
-            }
-
-            long elapsed = server.getTicks() - active.enterTick();
-            if (elapsed >= active.durationTicks()) {
-                SomniumMod.LOGGER.info("[Dream Tick] Таймаут сна {} для игрока {} ({}/{})",
-                    active.dreamId(), player.getName().getString(), elapsed, active.durationTicks());
-                wake(player, SanityManager.DreamOutcome.SURVIVED_TIMEOUT);
-            }
-        }
-    }
-
-    /**
-     * ДОБАВЛЕНО ("добавь тревожную музыку", "никакого шёпота нету"): раньше ни один сон не
-     * издавал вообще никаких периодических звуков — только разовые тайтлы при входе/выходе.
-     * Пока сон активен:
-     *  - каждые ~8-14 секунд играет общая тревожная фоновая "музыка" (пещерный эмбиент,
-     *    ModSounds.DREAM_DREAD_AMBIENCE) — одинаково для всех 7 снов, для атмосферы;
-     *  - отдельно, только в "Лесу теней" (shadow_forest), каждые ~9-16 секунд играет "шёпот"
-     *    (ModSounds.WHISPER_AMBIENT) — источник звука позиционируется РЕАЛЬНО ЗА СПИНОЙ игрока
-     *    (противоположно направлению взгляда на момент проигрывания), ровно как описано в цели
-     *    сна ("дойти до Дерева-Маяка, ни разу не обернувшись на шёпот за спиной").
-     * Вызывается тик-обработчиком (см. SomniumMod) наравне с tickActiveDreams.
-     *
-     * Механика "а что если всё-таки обернуться" реализована в tickShadowForest():
-     * здесь только запоминаются момент шёпота и yaw игрока (LAST_WHISPER_TICK/WHISPER_YAW).
-     */
-    public static void tickDreamAmbience(MinecraftServer server) {
-        if (ACTIVE.isEmpty()) return;
-        long now = server.getTicks();
-
-        for (UUID uuid : new ArrayList<>(ACTIVE.keySet())) {
-            ActiveDream active = ACTIVE.get(uuid);
-            if (active == null) continue;
-
-            // ИСКЛЮЧЕНИЕ: "Сон-в-сне" не получает фоновую музыку через эту функцию -
-            // музыка запускается программно через 20 секунд в tickDreamWithinDream()
-            if (active.dreamId().equals(SomniumMod.id("dream_within_dream"))) {
-                continue;
-            }
-
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(uuid);
-            if (player == null) continue;
-
-            long nextAmbience = NEXT_AMBIENCE_TICK.getOrDefault(uuid, 0L);
-            if (now >= nextAmbience) {
-                player.playSound(
-                        com.somnium.mod.registry.ModSounds.DREAM_DREAD_AMBIENCE,
-                        0.5f,
-                        0.7f + RANDOM.nextFloat() * 0.3f);
-                NEXT_AMBIENCE_TICK.put(uuid, now + 160 + RANDOM.nextInt(120)); // ~8-14 сек
-            }
-
-            if (active.dreamId().equals(SomniumMod.id("shadow_forest"))) {
-                long nextWhisper = NEXT_WHISPER_TICK.getOrDefault(uuid, 0L);
-                if (now >= nextWhisper) {
-                    playWhisperBehindPlayer(player);
-                    NEXT_WHISPER_TICK.put(uuid, now + 180 + RANDOM.nextInt(140)); // ~9-16 сек
-                    // ДОБАВЛЕНО ("не оборачивайся на шёпот"): запоминаем момент шёпота и
-                    // направление взгляда — tickShadowForest проверит, обернулся ли игрок
-                    LAST_WHISPER_TICK.put(uuid, now);
-                    WHISPER_YAW.put(uuid, player.getYaw());
-                }
-            }
-        }
-    }
-
-    /** Проигрывает "шёпот" из точки за спиной игрока — противоположно текущему направлению взгляда. */
-    private static void playWhisperBehindPlayer(ServerPlayerEntity player) {
-        if (!(player.getEntityWorld() instanceof ServerWorld world)) return;
-        double yawRad = Math.toRadians(player.getYaw());
-        double behindX = player.getX() + Math.sin(yawRad) * 3.5;
-        double behindZ = player.getZ() - Math.cos(yawRad) * 3.5;
-        // ПРОВЕРИТЬ ПРИ ПЕРВОЙ СБОРКЕ: World#playSound(PlayerEntity except, double x, double y,
-        // double z, SoundEvent, SoundCategory, float volume, float pitch) — стабильная сигнатура
-        // для 1.14+, но в теории могла получить доп. параметр (seed) в новых версиях; если
-        // компилятор ругается, добавьте недостающий аргумент по автодополнению IDE.
-        // ВАЖНО: except=null означает, что звук услышат ВСЕ игроки рядом с этой точкой в мире
-        // сна, а не только тот, за чьей спиной он должен быть — на одиночном сервере (как в
-        // вашем crash-report, Player Count: 1/8) это не имеет значения, но при нескольких
-        // игроках в одном сне это стоит заменить на адресную отправку пакета только этому игроку.
-        world.playSound(null, behindX, player.getY(), behindZ,
-                com.somnium.mod.registry.ModSounds.WHISPER_AMBIENT,
-                net.minecraft.sound.SoundCategory.HOSTILE,
-                0.8f, 0.5f + RANDOM.nextFloat() * 0.3f);
-    }
-
-    /**
-     * ДОБАВЛЕНО (баланс "Леса теней" по запросу "урон ощущается несправедливо"):
-     * грейс-период с момента входа в сон — мобы не должны атаковать игрока,
-     * пока он осматривается. 240 тиков = 12 секунд.
-     */
-    public static final long DREAM_ENTRY_GRACE_TICKS = 240L;
-
-    /**
-     * true, если игрок в активном сне и с момента входа прошло меньше
-     * DREAM_ENTRY_GRACE_TICKS тиков. Используется сущностями снов для запрета атак.
-     */
-    public static boolean isInDreamEntryGrace(UUID playerId, long nowTicks) {
-        ActiveDream active = ACTIVE.get(playerId);
-        return active != null && nowTicks - active.enterTick() < DREAM_ENTRY_GRACE_TICKS;
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Лес теней", финальная цель по запросу "нету конечной цели сна — доделай"):
-     * реализует описанное в цели сна правило "дойди до Дерева-Маяка, ни разу не обернувшись".
-     * 1) Ведьмины огни: каждые GUIDE_LIGHT_INTERVAL тиков перед игроком загорается цепочка
-     *    из трёх огоньков (soul fire) в направлении Двери пробуждения у Дерева-Маяка —
-     *    частицы видны даже под Blindness, поэтому цель наконец можно НАЙТИ в темноте.
-     * 2) "Не оборачивайся": в течение WHISPER_TURN_WINDOW тиков после шёпота за спиной
-     *    проверяется yaw игрока; если он повернулся больше чем на WHISPER_TURN_ANGLE —
-     *    прямо перед ним появляется Lurking Shade. Смерть от теней = поражение
-     *    (DIED_IN_DREAM, как и везде); выдержать соблазн и дойти до двери = победа.
-     */
-    public static void tickShadowForest(MinecraftServer server) {
-        if (ACTIVE.isEmpty()) return;
-        long now = server.getTicks();
-
-        for (UUID uuid : new ArrayList<>(ACTIVE.keySet())) {
-            ActiveDream active = ACTIVE.get(uuid);
-            if (active == null || !active.dreamId().equals(SomniumMod.id("shadow_forest"))) continue;
-
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(uuid);
-            if (player == null || !(player.getEntityWorld() instanceof ServerWorld world)) continue;
-
-            // 1) Ведьмины огни к Дереву-Маяку
-            if (active.doorPos() != null && now >= NEXT_GUIDE_LIGHT_TICK.getOrDefault(uuid, 0L)) {
-                double dx = active.doorPos().getX() + 0.5 - player.getX();
-                double dz = active.doorPos().getZ() + 0.5 - player.getZ();
-                double len = Math.sqrt(dx * dx + dz * dz);
-                if (len > 1.0) {
-                    dx /= len;
-                    dz /= len;
-                    for (int i = 1; i <= 3; i++) {
-                        world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL_FIRE_FLAME,
-                                player.getX() + dx * (i * 1.8), player.getY() + 1.2,
-                                player.getZ() + dz * (i * 1.8),
-                                1, 0.02, 0.02, 0.02, 0.0);
-                    }
-                }
-                NEXT_GUIDE_LIGHT_TICK.put(uuid, now + GUIDE_LIGHT_INTERVAL);
-            }
-
-            // 1.5) ДОБАВЛЕНО (новый выход "Дерево-Маяк" вместо двери): канал пробуждения.
-            // Стоишь в свете дерева — свет забирает тебя; вышел из света — канал затухает.
-            if (active.doorPos() != null) {
-                double distSq = player.squaredDistanceTo(
-                        active.doorPos().getX() + 0.5, player.getY(), active.doorPos().getZ() + 0.5);
-                if (distSq <= BEACON_TREE_CHANNEL_RADIUS * BEACON_TREE_CHANNEL_RADIUS) {
-                    int progress = BEACON_TREE_CHANNEL_TICKS.getOrDefault(uuid, 0) + 1;
-                    BEACON_TREE_CHANNEL_TICKS.put(uuid, progress);
-
-                    if (progress == 1) {
-                        player.sendMessage(net.minecraft.text.Text.literal(
-                                "§bОстанься в свете Дерева-Маяка — он забирает тебя из сна..."), true);
-                    } else if (progress % 25 == 0 && progress < BEACON_TREE_CHANNEL_REQUIRED) {
-                        player.sendMessage(net.minecraft.text.Text.literal(
-                                "§bСвет наполняет тебя... " + (progress * 100 / BEACON_TREE_CHANNEL_REQUIRED) + "%"), true);
-                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                                net.minecraft.sound.SoundEvents.BLOCK_AMETHYST_BLOCK_CHIME,
-                                net.minecraft.sound.SoundCategory.PLAYERS,
-                                1.0f, 0.8f + 0.4f * progress / BEACON_TREE_CHANNEL_REQUIRED);
-                    }
-                    // Души поднимаются вокруг игрока — видимый индикатор канала
-                    world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL,
-                            player.getX(), player.getY() + 0.5, player.getZ(),
-                            2, 0.3, 0.5, 0.3, 0.01);
-
-                    if (progress >= BEACON_TREE_CHANNEL_REQUIRED) {
-                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                                net.minecraft.sound.SoundEvents.BLOCK_BEACON_POWER_SELECT,
-                                net.minecraft.sound.SoundCategory.PLAYERS, 1.5f, 1.2f);
-                        BEACON_TREE_CHANNEL_TICKS.remove(uuid);
-                        wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
-                        continue;
-                    }
-                } else {
-                    // Вышел из света — канал затухает вдвое быстрее, чем накапливается
-                    Integer progress = BEACON_TREE_CHANNEL_TICKS.get(uuid);
-                    if (progress != null && progress > 0) {
-                        progress = Math.max(0, progress - 2);
-                        if (progress == 0) {
-                            BEACON_TREE_CHANNEL_TICKS.remove(uuid);
-                        } else {
-                            BEACON_TREE_CHANNEL_TICKS.put(uuid, progress);
-                        }
-                    }
-                }
-            }
-
-            // 2) "Не оборачивайся на шёпот"
-            Long whisperTick = LAST_WHISPER_TICK.get(uuid);
-            Float whisperYaw = WHISPER_YAW.get(uuid);
-            if (whisperTick == null || whisperYaw == null) continue;
-            if (now - whisperTick > WHISPER_TURN_WINDOW) {
-                // Окно соблазна истекло — игрок выдержал и не обернулся
-                LAST_WHISPER_TICK.remove(uuid);
-                continue;
-            }
-            float turned = Math.abs(net.minecraft.util.math.MathHelper.wrapDegrees(
-                    player.getYaw() - whisperYaw));
-            if (turned > WHISPER_TURN_ANGLE) {
-                LAST_WHISPER_TICK.remove(uuid); // один шёпот = одно наказание
-
-                // Тень материализуется прямо перед взглядом игрока — плата за любопытство
-                double yawRad = Math.toRadians(player.getYaw());
-                BlockPos shadePos = BlockPos.ofFloored(
-                        player.getX() - Math.sin(yawRad) * 2.5, player.getY(),
-                        player.getZ() + Math.cos(yawRad) * 2.5);
-                spawnOneAt(world, SomniumMod.id("lurking_shade"), shadePos);
-                world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                        com.somnium.mod.registry.ModSounds.WHISPER_AMBIENT,
-                        net.minecraft.sound.SoundCategory.HOSTILE, 1.2f, 0.3f);
-            }
-        }
-    }
-
-    /** Проверка условия цели конкретного сна — см. DreamObjectiveType для описания каждого типа. */
-    private static boolean isObjectiveComplete(ServerPlayerEntity player, ActiveDream active) {
-        if (active.objectiveType() == null) return false;
-        // ИЗМЕНЕНО (выход из "Зеркальной комнаты"): победа над отражением больше не будит
-        // мгновенно — после неё в стене открывается зеркало выхода (см. tickMirrorRoomGlass),
-        // и сон завершается шагом в свет. Иначе игрок просыпался бы прямо на месте боя.
-        if (active.dreamId().equals(SomniumMod.id("mirror_room"))) return false;
-        return switch (active.objectiveType()) {
-            case REACH_DOOR -> active.doorPos() != null
-                    && WakeDoorTracker.isObjectiveComplete(player.getUuid(), active.doorPos(), player.getBlockPos());
-            case BOSS_KILL -> active.bossTargetUuid() != null && isBossDefeated(player, active.bossTargetUuid());
-            case COLLECT_ITEMS -> active.collectItemId() != null
-                    && countHeldItem(player, active.collectItemId()) >= active.collectItemCount();
-        };
-    }
-
-    /** Босс считается побеждённым, если его сущность больше не загружена/жива в мире сна. */
-    private static boolean isBossDefeated(ServerPlayerEntity player, UUID bossUuid) {
-        if (!(player.getEntityWorld() instanceof ServerWorld dreamWorld)) return false;
-
-        // ИСПРАВЛЕНИЕ: не считаем босса побежденным в первые 20 тиков после входа в сон
-        // (grace period для загрузки сущности, особенно важно для mirror_room)
-        ActiveDream active = ACTIVE.get(player.getUuid());
-        if (active != null) {
-            long elapsed = dreamWorld.getServer().getTicks() - active.enterTick();
-            if (elapsed < 20) {
-                return false; // Босс еще загружается, не проверяем
-            }
-        }
-
-        var entity = dreamWorld.getEntity(bossUuid);
-        return entity == null || !entity.isAlive();
-    }
-
-    private static int countHeldItem(ServerPlayerEntity player, Identifier itemId) {
-        var maybeItem = Registries.ITEM.getOrEmpty(itemId);
-        if (maybeItem.isEmpty()) return 0;
-        var item = maybeItem.get();
-        int total = 0;
-        PlayerInventory inventory = player.getInventory();
-        for (int slot = 0; slot < inventory.size(); slot++) {
-            ItemStack stack = inventory.getStack(slot);
-            if (stack.getItem() == item) total += stack.getCount();
-        }
-        return total;
-    }
-
-    /** Игрок нашёл "Дверь пробуждения" раньше времени, либо выполнил цель сна. */
-    public static void wake(ServerPlayerEntity player, SanityManager.DreamOutcome outcome) {
-        ActiveDream active = ACTIVE.remove(player.getUuid());
-        if (active == null) {
-            SomniumMod.LOGGER.warn("[Dream Wake] Попытка разбудить игрока {}, но активный сон не найден", player.getName().getString());
-            return;
-        }
-
-        MinecraftServer server = ((ServerWorld) player.getEntityWorld()).getServer();
-        if (server == null) return;
-
-        long elapsed = server.getTicks() - active.enterTick();
-        SomniumMod.LOGGER.info("[Dream Wake] Игрок {} просыпается. Причина: {}, Сон: {}, Прошло тиков: {}/{}",
-            player.getName().getString(), outcome, active.dreamId(), elapsed, active.durationTicks());
-
-        // ДОБАВЛЕНО: очищаем чат от тревожных сообщений для сна dream_within_dream
-        if (active.dreamId().equals(SomniumMod.id("dream_within_dream"))) {
-            // Отправляем 100 пустых строк чтобы "прокрутить" чат и скрыть красные надписи
-            for (int i = 0; i < 100; i++) {
-                player.sendMessage(net.minecraft.text.Text.literal(""), false);
-            }
-        }
-
-        // ИСПРАВЛЕНИЕ (утечка per-dream стейта в общем сне): все карты состояния снов
-        // ключуются sessionKey (groupId) — фиксируем ключ ДО выхода из сессии, иначе после
-        // leaveSession() он уже не восстановить (для одиночного игрока sessionKey == playerId).
-        UUID dreamStateKey = sessionKey(player.getUuid());
-
-        // ДОБАВЛЕНО: удаляем игрока из активного сеанса сна
-        SharedDreamSession.leaveSession(player.getUuid(), active.dreamId());
-
-        // ИЗМЕНЕНО: очищаем артефакты сна только если это был последний игрок в сеансе
-        // Если есть другие игроки в этом сне, не удаляем двери/предметы/монстров
-        ServerWorld dreamWorld = (ServerWorld) player.getEntityWorld();
-        boolean hasOtherPlayers = SharedDreamSession.hasOtherPlayers(player.getUuid(), active.dreamId());
-        if (!hasOtherPlayers) {
-            cleanupDreamEntities(dreamWorld, active);
-        }
-
-        ServerWorld returnWorld = server.getWorld(active.returnDimension());
-        if (returnWorld == null) return;
-
-        player.teleport(returnWorld,
-                active.returnPos().getX() + 0.5, active.returnPos().getY(), active.returnPos().getZ() + 0.5,
-                player.getYaw(), player.getPitch());
-
-        player.fallDistance = 0;
-        player.setVelocity(0, 0, 0);
-        grantLandingImmunity(player);
-
-        // ИСПРАВЛЕНИЕ ("попадаю в сон с вещами из реального мира" / возврат): восстанавливаем
-        // ЦЕЛИКОМ тот инвентарь, с которым игрок засыпал — то, что он подобрал или потерял во сне,
-        // не переносится (см. snapshotAndClearInventory в enterDream).
-        restoreInventory(player, active.savedInventory());
-
-        // ДОБАВЛЕНО (сохранение состояния здоровья и сытости): восстанавливаем физическое
-        // состояние игрока на момент засыпания — урон и голод из сна не переносятся в реальность.
-        player.setHealth(active.savedHealth());
-        player.getHungerManager().setFoodLevel(active.savedFoodLevel());
-        player.getHungerManager().setSaturationLevel(active.savedSaturation());
-
-        // ИСПРАВЛЕНИЕ (эффекты не пропадают после пробуждения): очищаем все эффекты зелий,
-        // полученные во время сна — они не должны переноситься в реальный мир.
-        player.clearStatusEffects();
-
-        // ИСПРАВЛЕНИЕ ("после пробуждения не скипается ночь"): обычный ванильный ночной скип
-        // завязан на то, что игрок непрерывно остаётся isSleeping()=true в одном и том же мире,
-        // пока % спящих игроков не станет достаточным несколько тиков подряд. Мы же сами вызываем
-        // player.wakeUp() и телепортируем игрока в измерение сна ещё во время начала этого процесса
-        // (см. enterDream) — тем самым обрываем ванильный скип на середине: время в реальном мире
-        // не доматывается до утра и продолжает идти как обычно, пока игрок отсутствует. В итоге
-        // игрок мог "проспать" весь сон, а по возвращении всё ещё застать ночь. Раз игрок формально
-        // "лёг спать" — эмулируем ванильный результат сна вручную: если сейчас в мире возврата ночь,
-        // домотать время до утра и погасить дождь/грозу, как это делает обычная кровать.
-        forceMorningIfNight(returnWorld);
-
-        SanityManager.onWake(player, outcome, active.dreamId().toString());
-        sendDreamTitle(player, net.minecraft.text.Text.translatable("somnium.dream.wake")
-                .copy().formatted(net.minecraft.util.Formatting.GRAY), null);
-        DreamHudPayload.sendInactive(player);
-
-        // Сбрасываем расписание эмбиента/шёпота — следующий сон начинает отсчёт заново.
-        NEXT_AMBIENCE_TICK.remove(player.getUuid());
-        NEXT_WHISPER_TICK.remove(player.getUuid());
-
-        // ДОБАВЛЕНО (мультиплеер, защита кровати): снимаем защиту с кровати при пробуждении
-        PROTECTED_BEDS.remove(player.getUuid());
-
-        // ДОБАВЛЕНО (мультиплеер, видимость спящего партнёра): убираем "тело" из кровати
-        removeSleepingBody(server, player.getUuid());
-
-        // ДОБАВЛЕНО (сон "Лес теней"): очищаем трекинг "не обернувшись", ведьминых огней
-        // и канала Дерева-Маяка
-        LAST_WHISPER_TICK.remove(player.getUuid());
-        WHISPER_YAW.remove(player.getUuid());
-        NEXT_GUIDE_LIGHT_TICK.remove(player.getUuid());
-        BEACON_TREE_CHANNEL_TICKS.remove(player.getUuid());
-
-        // ДОБАВЛЕНО: очищаем трекер двери пробуждения
-        WakeDoorTracker.onDreamEnd(player.getUuid());
-
-        // ДОБАВЛЕНО (сон "Падающие доски"): очищаем данные о платформе при пробуждении
-        // ИСПРАВЛЕНО: карты платформ ключуются sessionKey — см. dreamStateKey выше
-        clearFallingPlanksData(dreamStateKey);
-        // "Лестница в никуда": per-player стейт (последняя безопасная точка, стояние на гнилом)
-        STAIR_LAST_SAFE.remove(player.getUuid());
-        STAIR_ROTTEN_STAND.remove(player.getUuid());
-
-        // ИСПРАВЛЕНИЕ (утечка per-dream стейта в общем сне): карты состояния снов (стол пира,
-        // лабиринт и т.п.) ключуются sessionKey (groupId), а leaveSession() выше уже отвязал
-        // игрока от группы — поэтому ключ вычисляем заново через sessionKey() НЕЛЬЗЯ, он
-        // вернёт playerId. Для корректной очистки в общем сне используем dreamStateKey,
-        // зафиксированный ДО leaveSession (для одиночного игрока совпадает с playerId).
-        // ДОБАВЛЕНО (сон "Зеркальная комната"): очищаем данные о стекле при пробуждении
-        // (PENDING_MIRROR_INIT намеренно остаётся по playerId — кладётся под UUID игрока)
-        MIRROR_ROOM_GLASS.remove(dreamStateKey);
-        MIRROR_GLASS_BREAK_TIME.remove(dreamStateKey);
-        MIRROR_ROOM_CORNER.remove(dreamStateKey);
-        MIRROR_ROOM_EXIT.remove(dreamStateKey);
-        MIRROR_ROOM_NEXT_EXIT_FX.remove(dreamStateKey);
-        PENDING_MIRROR_INIT.remove(player.getUuid());
-
-        // ДОБАВЛЕНО (сон "Тонущий город"): очищаем данные об уровне воды при пробуждении
-        DROWNING_CITY_WATER_LEVEL.remove(dreamStateKey);
-        DROWNING_CITY_FILL_QUEUE.remove(dreamStateKey);
-        // ДОБАВЛЕНО (выход через колокол собора): колокол, карман, маяк, осушка
-        DROWNING_CITY_BELL_POS.remove(dreamStateKey);
-        DROWNING_CITY_AIR_POCKET.remove(dreamStateKey);
-        DROWNING_CITY_NEXT_BEAM.remove(dreamStateKey);
-        DROWNING_CITY_DRAIN_LEVEL.remove(dreamStateKey);
-        DROWNING_CITY_DRAIN_QUEUE.remove(dreamStateKey);
-
-        // ДОБАВЛЕНО (сон "Обрушающаяся шахта"): очищаем данные о лабиринте при пробуждении
-        COLLAPSING_MINE_MAZES.remove(dreamStateKey);
-        COLLAPSING_MINE_ORIGINS.remove(dreamStateKey);
-        MINE_OPENED_PASSAGES.remove(dreamStateKey);
-        NEXT_MINE_SHIFT_TICK.remove(dreamStateKey);
-        MINE_NEXT_SCREAM.remove(dreamStateKey);
-
-        // ДОБАВЛЕНО (сон "Кровавый пир", редизайн): стол, блюдо, курсы, кубок при пробуждении
-        FEAST_TABLES.remove(dreamStateKey);
-        FEAST_DISH_ITEM.remove(dreamStateKey);
-        FEAST_DISH_TAINTED.remove(dreamStateKey);
-        FEAST_DISH_TAKEN.remove(dreamStateKey);
-        FEAST_DISH_DEADLINE.remove(dreamStateKey);
-        NEXT_DISH_TICK.remove(dreamStateKey);
-        FEAST_COURSES_DONE.remove(dreamStateKey);
-        FEAST_TOAST_ITEM.remove(dreamStateKey);
-        FEAST_GUESTS.remove(dreamStateKey);
-        FEAST_NEXT_GUEST_SOUND.remove(dreamStateKey);
-        FEAST_JUDGE_FOCUS_POS.remove(dreamStateKey);
-        FEAST_JUDGE_FOCUS_UNTIL.remove(dreamStateKey);
-        // Догорающие блюда убираем из мира, чтобы не висели вечными предметами
-        if (player.getEntityWorld() instanceof ServerWorld feastWorld) {
-            for (UUID burningUuid : FEAST_BURNING_DISHES.keySet()) {
-                var burning = feastWorld.getEntity(burningUuid);
-                if (burning != null) burning.discard();
-            }
-        }
-        FEAST_BURNING_DISHES.clear();
-        // Зажигалка и кубок — сонные предметы, в реальный мир их забирать нельзя
-        removeFeastItems(player);
-        FEAST_LIGHTER_GIVEN.remove(player.getUuid());
-
-        // ДОБАВЛЕНО (сон "Пустошь зеркал", редизайн): зеркало, Двойник, касания
-        if (player.getEntityWorld() instanceof ServerWorld mwWorld) {
-            clearMirrorWastesData(mwWorld, dreamStateKey);
-        }
-
-        // ДОБАВЛЕНО (сон "Пустота с глазами"): трекинг "движа в начале" + финал "Перехвати взгляд"
-        VOE_START_TICK.remove(dreamStateKey);
-        VOE_DISPELLED.remove(dreamStateKey);
-        VOE_TOUCH_COOLDOWN.clear(); // кулдауны привязаны к сущностям сна — они исчезают вместе с ним
-
-        // ДОБАВЛЕНО (долгие подсказки): на яву сонные подсказки не тянем
-        ACTIVE_HINTS.remove(player.getUuid());
-
-        // ДОБАВЛЕНО (сон "Сон-в-сне"): очищаем данные о погоде при пробуждении
-        DREAM_WITHIN_DREAM_ORIGINAL_POS.remove(player.getUuid());
-        DREAM_WITHIN_DREAM_CHUNKS.remove(player.getUuid());
-        DREAM_WITHIN_DREAM_SIGN_START.remove(player.getUuid());
-        DREAM_WITHIN_DREAM_ORIGINAL_WEATHER.remove(player.getUuid());
-    }
-
-    /**
-     * Домотать время мира возврата до утра и убрать непогоду, если сейчас там ночь —
-     * см. комментарий про обрыв ванильного ночного скипа в wake() выше.
-     * Диапазон "ночь" взят по аналогии с ванильным условием, при котором кровать вообще
-     * позволяет лечь (примерно с 12000 по 23999 тиков суток) — сверьте с decompile 1.21.11,
-     * если гейм-дизайн потребует более точного порога.
-     */
-    private static void forceMorningIfNight(ServerWorld world) {
-        long timeOfDay = world.getTimeOfDay();
-        long dayTime = timeOfDay % 24000L;
-        boolean isNight = dayTime >= 12000L;
-        if (!isNight) return;
-
-        long morningTime = timeOfDay - dayTime + 24000L;
-        world.setTimeOfDay(morningTime);
-        world.setWeather(0, 0, false, false);
-    }
-
-    /**
-     * Снимает копию текущего инвентаря игрока (основной + броня + офф-хенд, всё, что покрывает
-     * PlayerInventory#size()) и сразу очищает реальный инвентарь — во сне у игрока должно быть
-     * пусто. Копии ItemStack не сериализуются, а хранятся как есть в памяти (см. ActiveDream).
-     */
-    private static List<ItemStack> snapshotAndClearInventory(ServerPlayerEntity player) {
-        PlayerInventory inventory = player.getInventory();
-        List<ItemStack> snapshot = new ArrayList<>(inventory.size());
-        for (int slot = 0; slot < inventory.size(); slot++) {
-            ItemStack stack = inventory.getStack(slot);
-            snapshot.add(stack.copy());
-            // ДОБАВЛЕНО: Колокол Пробуждения (WakingBellItem) — единственное исключение из общей
-            // очистки инвентаря. Это предмет-"аварийный выход", специально предназначенный для
-            // использования ВНУТРИ сна, поэтому логично, что игрок берёт его с собой физически
-            // (как будто сжимает в руке, засыпая), а не находит уже во сне.
-            if (!(stack.getItem() instanceof com.somnium.mod.item.WakingBellItem)) {
-                inventory.setStack(slot, ItemStack.EMPTY);
-            }
-        }
-        player.currentScreenHandler.sendContentUpdates();
-        return snapshot;
-    }
-
-    /**
-     * Заменяет инвентарь на сохранённый снимок из яви. Слоты с Колоколом Пробуждения не трогаем —
-     * они и так не выгружались при входе в сон (см. snapshotAndClearInventory) и могли быть
-     * частично израсходованы прямо во сне (см. WakingBellItem#use) — восстановление из снимка
-     * затёрло бы этот расход обратно к исходному количеству.
-     */
-    private static void restoreInventory(ServerPlayerEntity player, List<ItemStack> savedInventory) {
-        PlayerInventory inventory = player.getInventory();
-        for (int slot = 0; slot < savedInventory.size() && slot < inventory.size(); slot++) {
-            ItemStack current = inventory.getStack(slot);
-            if (current.getItem() instanceof com.somnium.mod.item.WakingBellItem) continue;
-            inventory.setStack(slot, savedInventory.get(slot));
-        }
-        player.currentScreenHandler.sendContentUpdates();
-    }
-
-    private static void grantLandingImmunity(ServerPlayerEntity player) {
-        MinecraftServer server = ((ServerWorld) player.getEntityWorld()).getServer();
-        if (server == null) return;
-        LANDING_IMMUNITY_UNTIL.put(player.getUuid(), server.getTicks() + LANDING_IMMUNITY_TICKS);
-    }
-
-    /** Проверяется в ServerPlayerEntityMixin перед обработкой урона/смерти игрока. */
-    public static boolean isLandingImmune(UUID playerId, long currentTick) {
-        Long until = LANDING_IMMUNITY_UNTIL.get(playerId);
-        return until != null && currentTick < until;
-    }
-
-    /** Чистит устаревшие записи об иммунитете — вызывается тик-обработчиком. */
-    public static void tickLandingImmunity(MinecraftServer server) {
-        if (LANDING_IMMUNITY_UNTIL.isEmpty()) return;
-        LANDING_IMMUNITY_UNTIL.values().removeIf(until -> server.getTicks() >= until);
-    }
-
-    /**
-     * Показывает крупный текст по центру экрана (как ванильные тайтлы достижений/смены дня),
-     * а не сообщение в чат — заголовок красным (тема кошмара), подзаголовок серым.
-     * subtitle может быть null, если нужен только заголовок.
-     */
-    private static void sendDreamTitle(ServerPlayerEntity player, net.minecraft.text.Text title, net.minecraft.text.Text subtitle) {
-        net.minecraft.text.Text redTitle = title.copy().formatted(net.minecraft.util.Formatting.RED, net.minecraft.util.Formatting.BOLD);
-
-        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.TitleFadeS2CPacket(10, 60, 20));
-        if (subtitle != null) {
-            player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.SubtitleS2CPacket(subtitle));
-        }
-        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.TitleS2CPacket(redTitle));
-    }
-
-    /**
-     * Вызывается при смерти игрока внутри сна (см. ServerPlayerEntityMixin — реальная смерть
-     * там ОТМЕНЯЕТСЯ через ci.cancel(), поэтому здесь нужно самим "откатить" последствия
-     * смертельного удара: здоровье, огонь, эффекты — иначе игрок вернётся в явь с 0 HP.
-     * По сути "смерть во сне" не убивает по-настоящему, а резко будит игрока.
-     */
-    public static void onDeathInDream(ServerPlayerEntity player) {
-        if (ACTIVE.containsKey(player.getUuid())) {
-            SomniumMod.LOGGER.warn("[Dream Death] Игрок {} умер во сне! Здоровье: {}, Y: {}",
-                player.getName().getString(), player.getHealth(), player.getY());
-
-            player.setHealth(player.getMaxHealth());
-            player.clearStatusEffects();
-            player.extinguish();
-            player.setFireTicks(0);
-            wake(player, SanityManager.DreamOutcome.DIED_IN_DREAM);
-        }
-    }
-
-    /**
-     * Обновляет постоянный HUD цели сна (полосу оставшегося времени) для игрока, если у него
-     * сейчас активный сон — вызывается раз в секунду из SomniumMod, рядом с тиком рассудка.
-     * Не путать с sendDreamTitle/DreamHudPayload.sendActive в enterDream — тот отправляется
-     * один раз при входе, этот — регулярно, чтобы полоса времени реально "утекала" на экране.
-     */
-    public static void sendHudUpdateIfDreaming(ServerPlayerEntity player, MinecraftServer server) {
-        ActiveDream active = ACTIVE.get(player.getUuid());
-        if (active == null) return;
-
-        DreamType dream = DreamRegistry.get(active.dreamId());
-
-        // ИСКЛЮЧЕНИЕ: "Сон-в-сне" не показывает HUD — полностью скрываем интерфейс
-        if (dream != null && dream.id().equals(SomniumMod.id("dream_within_dream"))) {
-            return;
-        }
-
-        String nameKey = dream != null ? dream.displayNameKey() : active.dreamId().toString();
-
-        long elapsed = server.getTicks() - active.enterTick();
-        long remaining = Math.max(0L, active.durationTicks() - elapsed);
-
-        // ДОБАВЛЕНО: для COLLECT_ITEMS дописываем в HUD живой прогресс (X/Y) — без этого игрок
-        // не понимает, сколько ещё собирать до выполнения цели.
-        String objectiveText = active.objective();
-        if (active.objectiveType() == DreamObjectiveType.COLLECT_ITEMS && active.collectItemId() != null) {
-            int have = Math.min(active.collectItemCount(), countHeldItem(player, active.collectItemId()));
-            objectiveText = objectiveText + " (" + have + "/" + active.collectItemCount() + ")";
-        }
-
-        DreamHudPayload.sendActive(player, nameKey, objectiveText,
-                (int) remaining, (int) active.durationTicks());
-    }
-
-    private static Identifier safeParse(String raw) {
-        if (raw == null || raw.isEmpty()) return null;
-        return Identifier.tryParse(raw);
-    }
-
-    /**
-     * ДОБАВЛЕНО (негативные эффекты во время сна): накладывает дебаффы на игрока при входе в сон.
-     * ИЗМЕНЕНО: каждый сон имеет свой уникальный набор эффектов, подходящий под его тематику.
-     *
-     * Эффекты по снам:
-     * - drowning_city: Water Breathing НЕТ + Slowness (тяжело двигаться в воде)
-     * - shadow_forest: Blindness + Slowness (темнота леса, шёпот дезориентирует)
-     * - mirror_wastes: Nausea + Weakness (зеркала искажают восприятие)
-     * - collapsing_mine: Blindness III + Mining Fatigue (темнота шахты, обрушение)
-     * - crimson_feast: Hunger + Weakness (голод и слабость)
-     * - void_of_eyes: Levitation (кратковременно) + Slowness Falling (парение в пустоте)
-     * - dream_within_dream: все эффекты сразу (самый тяжёлый кошмар)
-     */
-    private static void applyDreamDebuffs(ServerPlayerEntity player, Identifier dreamId, long dreamDurationTicks) {
-        int durationInTicks = (int) Math.min(Integer.MAX_VALUE, dreamDurationTicks + 100);
-
-        // Базовый эффект для всех снов - невозможность ломать блоки (сны не должны позволять изменять мир)
-        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                net.minecraft.entity.effect.StatusEffects.MINING_FATIGUE,
-                durationInTicks,
-                4, // уровень V
-                false, false, true
-        ));
-
-        // Уникальные эффекты в зависимости от сна
-        if (dreamId.equals(SomniumMod.id("drowning_city"))) {
-            // Тонущий город: тяжесть движения в воде, НЕТ водного дыхания (нужно искать воздух)
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.SLOWNESS,
-                    durationInTicks, 2, false, false, true
-            ));
-
-        } else if (dreamId.equals(SomniumMod.id("shadow_forest"))) {
-            // Лес теней: густая темнота + замедление от страха
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.BLINDNESS,
-                    durationInTicks, 0, false, false, true
-            ));
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.SLOWNESS,
-                    durationInTicks, 1, false, false, true
-            ));
-
-        } else if (dreamId.equals(SomniumMod.id("mirror_wastes"))) {
-            // Пустошь зеркал: искажение восприятия + физическая слабость
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.NAUSEA,
-                    durationInTicks, 0, false, false, true
-            ));
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.WEAKNESS,
-                    durationInTicks, 1, false, false, true
-            ));
-
-        } else if (dreamId.equals(SomniumMod.id("collapsing_mine"))) {
-            // Обрушающаяся шахта: почти полная темнота
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.BLINDNESS,
-                    durationInTicks, 2, // усиленная слепота
-                    false, false, true
-            ));
-
-        } else if (dreamId.equals(SomniumMod.id("crimson_feast"))) {
-            // Кровавый пир: голод и слабость (тема извращённого пира)
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.HUNGER,
-                    durationInTicks, 2, false, false, true
-            ));
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.WEAKNESS,
-                    durationInTicks, 0, false, false, true
-            ));
-
-        } else if (dreamId.equals(SomniumMod.id("void_of_eyes"))) {
-            // Пустота с глазами: ощущение парения, медленное падение
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.SLOW_FALLING,
-                    durationInTicks, 0, false, false, true
-            ));
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.SLOWNESS,
-                    durationInTicks, 1, false, false, true
-            ));
-
-        } else if (dreamId.equals(SomniumMod.id("dream_within_dream"))) {
-            // Сон-в-сне: комбинация всех кошмаров (самый тяжёлый сон)
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.SLOWNESS,
-                    durationInTicks, 2, false, false, true
-            ));
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.NAUSEA,
-                    durationInTicks, 0, false, false, true
-            ));
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.WEAKNESS,
-                    durationInTicks, 1, false, false, true
-            ));
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.BLINDNESS,
-                    durationInTicks, 0, false, false, true
-            ));
-
-        } else if (dreamId.equals(SomniumMod.id("falling_planks"))) {
-            // Падающие доски: только слабость (страх), без левитации
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.WEAKNESS,
-                    durationInTicks, 0, false, false, true
-            ));
-        }
-    }
-
-    /**
-     * ИСПРАВЛЕНИЕ (баг дублирования дверей): удаляет все артефакты предыдущего визита в сон —
-     * маркеры "Двери пробуждения" (ArmorStand), собираемые предметы (ItemEntity с neverDespawn),
-     * и оставшихся монстров сна. Вызывается из wake() перед телепортацией игрока обратно.
-     *
-     * Альтернативный подход (удалять всё при ВХОДЕ в сон) не подходит, т.к. теоретически в одном
-     * измерении сна могут находиться несколько игроков одновременно (мультиплеер) — удаление при
-     * входе второго игрока сломало бы сон первого. Удаление при ВЫХОДЕ безопаснее: последний
-     * покинувший сон игрок "гасит свет".
-     */
-    private static void cleanupDreamEntities(ServerWorld dreamWorld, ActiveDream active) {
-        // Удаляем дверь пробуждения и её структуру (если была)
-        if (active.doorPos() != null) {
-            BlockPos doorPos = active.doorPos();
-
-            // Удаляем маркер ArmorStand над дверью
-            var nearbyEntities = dreamWorld.getEntitiesByClass(
-                    ArmorStandEntity.class,
-                    new net.minecraft.util.math.Box(doorPos).expand(5.0),
-                    entity -> entity.isInvulnerable() && entity.isInvisible()
-            );
-            for (var marker : nearbyEntities) {
-                marker.discard();
-            }
-
-            // Удаляем саму дверь (нижняя и верхняя половины)
-            dreamWorld.setBlockState(doorPos, net.minecraft.block.Blocks.AIR.getDefaultState());
-            dreamWorld.setBlockState(doorPos.up(), net.minecraft.block.Blocks.AIR.getDefaultState());
-
-            // Удаляем фундамент из кварца
-            for (int x = -1; x <= 1; x++) {
-                for (int z = -1; z <= 1; z++) {
-                    dreamWorld.setBlockState(doorPos.add(x, -1, z), net.minecraft.block.Blocks.AIR.getDefaultState());
-                }
-            }
-
-            // Удаляем рамку из светящихся блоков
-            dreamWorld.setBlockState(doorPos.add(-1, 0, 0), net.minecraft.block.Blocks.AIR.getDefaultState());
-            dreamWorld.setBlockState(doorPos.add(1, 0, 0), net.minecraft.block.Blocks.AIR.getDefaultState());
-            dreamWorld.setBlockState(doorPos.add(-1, 1, 0), net.minecraft.block.Blocks.AIR.getDefaultState());
-            dreamWorld.setBlockState(doorPos.add(1, 1, 0), net.minecraft.block.Blocks.AIR.getDefaultState());
-            dreamWorld.setBlockState(doorPos.add(-1, 2, 0), net.minecraft.block.Blocks.AIR.getDefaultState());
-            dreamWorld.setBlockState(doorPos.add(0, 2, 0), net.minecraft.block.Blocks.AIR.getDefaultState());
-            dreamWorld.setBlockState(doorPos.add(1, 2, 0), net.minecraft.block.Blocks.AIR.getDefaultState());
-        }
-
-        // Удаляем все собираемые предметы (ItemEntity с neverDespawn)
-        // ВАЖНО: удаляем ТОЛЬКО предметы с флагом neverDespawn (те, что мы сами раскидали при
-        // входе в сон) — если игрок что-то выбросил сам, это обычный ItemEntity без флага.
-        // Проверяем через itemAge: предметы с setNeverDespawn() имеют itemAge = -32768
-        var allItems = dreamWorld.getEntitiesByClass(
-                ItemEntity.class,
-                new net.minecraft.util.math.Box(BlockPos.ORIGIN).expand(100.0),
-                item -> item.getItemAge() == -32768 // предметы с neverDespawn имеют специальное значение возраста
-        );
-        for (var item : allItems) {
-            item.discard();
-        }
-
-        // Удаляем всех оставшихся монстров сна (AbstractNightmareEntity)
-        // Это опционально (монстры сами по себе не мешают следующему визиту, т.к. при входе
-        // спавнятся новые), но предотвращает накопление "зависших" мобов при частых входах/выходах.
-        var nightmares = dreamWorld.getEntitiesByClass(
-                com.somnium.mod.entity.nightmare.AbstractNightmareEntity.class,
-                new net.minecraft.util.math.Box(BlockPos.ORIGIN).expand(100.0),
-                entity -> true
-        );
-        for (var nightmare : nightmares) {
-            nightmare.discard();
-        }
-    }
-
-    /**
-     * ДОБАВЛЕНО (мультиплеер, видимость спящего партнёра): создаёт лежащую в кровати
-     * "модель" игрока (невидимый ArmorStand с именем игрока над головой) в реальном мире —
-     * чтобы проснувшиеся или другие игроки видели, что партнёр всё ещё спит, а не исчез.
-     * Удаляется в removeSleepingBody() при пробуждении настоящего игрока (см. wake()).
-     */
-    private static void spawnSleepingBody(ServerPlayerEntity player, ServerWorld world, BlockPos bedPos) {
-        ArmorStandEntity body = new ArmorStandEntity(EntityType.ARMOR_STAND, world);
-        body.refreshPositionAndAngles(bedPos.getX() + 0.5, bedPos.getY() + 0.2, bedPos.getZ() + 0.5,
-                player.getYaw(), 0);
-        body.setInvisible(true);
-        body.setInvulnerable(true);
-        body.setNoGravity(true);
-        body.setCustomName(net.minecraft.text.Text.translatable("somnium.dream.sleeping_body", player.getName()));
-        body.setCustomNameVisible(true);
-        // Поза "лёжа": наклон правой руки/тела условно имитирует лежание — ArmorStand не умеет
-        // ложиться физически, поэтому кладём его на бок разворотом основной позы.
-        body.setBodyYaw(player.getYaw());
-        body.setPose(net.minecraft.entity.EntityPose.SLEEPING);
-
+    private static void spawnSleepingBody(Participant participant, ServerPlayerEntity player) {
+        BlockPos bed = participant.snapshot.bedPos;
+        if (bed == null || !(player.getWorld() instanceof ServerWorld world)) return;
+        SleepingBodyEntity body = ModEntities.SLEEPING_BODY.create(world);
+        if (body == null) return;
+        body.setOwner(player);
+        body.refreshPositionAndAngles(bed.getX() + 0.5, bed.getY() + 0.5625, bed.getZ() + 0.5, player.getYaw(), 0.0f);
         world.spawnEntity(body);
-        SLEEPING_BODIES.put(player.getUuid(), body.getUuid());
+        body.sleep(bed);
+        participant.bodyId = body.getUuid();
     }
 
-    /**
-     * ДОБАВЛЕНО (мультиплеер, видимость спящего партнёра): убирает "тело" при пробуждении
-     * настоящего игрока (естественном или по колоколу) — см. вызов в wake().
-     */
-    private static void removeSleepingBody(MinecraftServer server, UUID playerId) {
-        UUID bodyId = SLEEPING_BODIES.remove(playerId);
-        if (bodyId == null) return;
-
-        for (ServerWorld world : server.getWorlds()) {
-            var entity = world.getEntity(bodyId);
-            if (entity != null) {
-                entity.discard();
-                return;
-            }
+    private static void removeSleepingBody(MinecraftServer server, Participant participant) {
+        if (participant.bodyId == null) return;
+        ServerWorld world = server.getWorld(participant.snapshot.returnWorld);
+        if (world != null && world.getEntity(participant.bodyId) instanceof SleepingBodyEntity body) {
+            body.removeFromBed();
         }
-    }
-
-    /**
-     * ДОБАВЛЕНО (мультиплеер, защита кровати): запоминает обе половины кровати игрока.
-     */
-    private static void protectPlayerBed(ServerPlayerEntity player, BlockPos bedPos) {
-        if (!(player.getEntityWorld() instanceof ServerWorld world)) return;
-
-        net.minecraft.block.BlockState state = world.getBlockState(bedPos);
-        if (!(state.getBlock() instanceof net.minecraft.block.BedBlock)) return;
-
-        List<BlockPos> bedBlocks = new ArrayList<>();
-        bedBlocks.add(bedPos);
-
-        // Находим вторую половину кровати
-        net.minecraft.block.enums.BedPart part = state.get(net.minecraft.block.BedBlock.PART);
-        net.minecraft.util.math.Direction facing = state.get(net.minecraft.block.BedBlock.FACING);
-        BlockPos otherHalf = part == net.minecraft.block.enums.BedPart.HEAD
-                ? bedPos.offset(facing.getOpposite())
-                : bedPos.offset(facing);
-        bedBlocks.add(otherHalf);
-
-        PROTECTED_BEDS.put(player.getUuid(), bedBlocks);
-    }
-
-    /**
-     * ДОБАВЛЕНО (мультиплеер, защита кровати): проверяет, защищена ли кровать.
-     */
-    public static boolean isBedProtected(BlockPos pos) {
-        for (List<BlockPos> bedBlocks : PROTECTED_BEDS.values()) {
-            if (bedBlocks.contains(pos)) return true;
-        }
-        return false;
-    }
-
-    /**
-     * ДОБАВЛЕНО (мультиплеер, колокол): проверяет, находится ли игрок во сне.
-     */
-    public static boolean isDreaming(UUID playerId) {
-        return ACTIVE.containsKey(playerId);
-    }
-
-    // ==================== ДОБАВЛЕНО (сон "Лестница в никуда", редизайн "Падающих досок") ====================
-    // Классическая лестничная клетка многоэтажки (по референсу игрока): мятные призмариновые
-    // стены, серые бетонные марши вдоль стен с решётчатыми перилами вдоль пролёта, окна
-    // между этажами, выходящие в тьму. Этаж = площадка + марш + площадка + марш (+8 высоты).
-    // Марши достраиваются вверх по мере подъёма и обрушаются за спиной. С третьего этажа —
-    // гнилые ступени (бирюзовые, дымятся). На последнем этаже лестница обрывается:
-    // глухой потолок и люк — выход из сна.
-
-    /** Центр входной площадки (спавн игрока) для каждой сессии */
-    private static final Map<UUID, BlockPos> STAIR_ORIGIN = new HashMap<>();
-    /** Индекс следующего непостроенного фрагмента (площадка/марш) */
-    private static final Map<UUID, Integer> STAIR_BUILT_STAGES = new HashMap<>();
-    /** Индекс фрагмента -> его блоки (для обрушения за спиной) */
-    private static final Map<UUID, List<List<BlockPos>>> STAIR_STAGE_BLOCKS = new HashMap<>();
-    /** Индекс следующего фрагмента на обрушение */
-    private static final Map<UUID, Integer> STAIR_COLLAPSE_NEXT = new HashMap<>();
-    /** Очередь блоков на обрушение — сыплем по одному за пару тиков */
-    private static final Map<UUID, List<BlockPos>> STAIR_COLLAPSE_QUEUE = new HashMap<>();
-    /** Гнилые ступени (не держат вес) */
-    private static final Map<UUID, java.util.Set<BlockPos>> STAIR_ROTTEN = new HashMap<>();
-    /** Позиция люка в потолке последнего этажа — выход из сна */
-    private static final Map<UUID, BlockPos> STAIR_HATCH = new HashMap<>();
-    /** Текущая высота временного потолка подъезда (поднимается по мере постройки) */
-    private static final Map<UUID, Integer> STAIR_CEILING_Y = new HashMap<>();
-    /** Верх построенной части стен подъезда */
-    private static final Map<UUID, Integer> STAIR_WALL_TOP_Y = new HashMap<>();
-    /** Тик пробуждения после открытия люка */
-    private static final Map<UUID, Long> STAIR_WAKE_TICK = new HashMap<>();
-    /** Сообщение "лестница обрывается" показано */
-    private static final Map<UUID, Boolean> STAIR_FINAL_ANNOUNCED = new HashMap<>();
-    /** Последняя безопасная точка игрока на лестнице (per-player) */
-    private static final Map<UUID, net.minecraft.util.math.Vec3d> STAIR_LAST_SAFE = new HashMap<>();
-    /** Сколько тиков игрок стоит на гнилой ступени (per-player) */
-    private static final Map<UUID, Integer> STAIR_ROTTEN_STAND = new HashMap<>();
-
-    /** Этажей в подъезде; этаж = 4 фрагмента (площадка, марш, площадка, марш), +8 высоты */
-    // ИЗМЕНЕНО ("лестница вверх должна быть дольше"): было 5 этажей (~40 блоков подъёма),
-    // стало 8 (~64 блока) — подъезд ощущается бесконечным, как в страшном сне
-    private static final int STAIR_FLOORS = 8;
-    /** Финальный фрагмент — площадка последнего этажа с люком */
-    private static final int STAIR_FINAL_STAGE = STAIR_FLOORS * 4;
-    /** Сколько фрагментов строим вперёд от игрока */
-    private static final int STAIR_BUILD_AHEAD = 3;
-    /** Фрагменты ниже этого отставания от игрока обрушаются */
-    private static final int STAIR_COLLAPSE_BEHIND = 3;
-    /** Гниль начинается с третьего этажа (индекс 2) */
-    private static final int STAIR_ROTTEN_START_FLOOR = 2;
-    private static final double STAIR_ROTTEN_CHANCE = 0.15;
-    /** Через сколько тиков стояния гнилая ступень ломается */
-    private static final int STAIR_ROTTEN_BREAK_TICKS = 15;
-    /** Падение ниже последней безопасной точки на столько блоков = ловим и возвращаем */
-    private static final double STAIR_FALL_CATCH_DEPTH = 5.0;
-    private static final float STAIR_FALL_DAMAGE = 4.0f;
-    private static final float STAIR_FALL_SANITY = -4.0f;
-    private static final float STAIR_ROTTEN_SANITY = -2.0f;
-
-    // ===== ДОБАВЛЕНО (фидбек): обвал ступеней ПРЯМО ПЕРЕД игроком =====
-    /** Фрагмент-марш, на котором игрок стоит сейчас (-1 вне марша) */
-    private static final Map<UUID, Integer> STAIR_LAST_FLIGHT_STAGE = new HashMap<>();
-    /** Очередной ряд, который трещит и вот-вот обрушится */
-    private static final Map<UUID, StairCrumble> STAIR_CRUMBLE_PENDING = new HashMap<>();
-    /** Тик, когда можно крошить следующий ряд */
-    private static final Map<UUID, Long> STAIR_NEXT_CRUMBLE_TICK = new HashMap<>();
-    /** Сломанные обвалом блоки -> что там было (для "заживления") */
-    private static final Map<UUID, Map<BlockPos, net.minecraft.block.BlockState>> STAIR_BROKEN = new HashMap<>();
-    /** Сломанные блоки -> тик восстановления */
-    private static final Map<UUID, Map<BlockPos, Long>> STAIR_BROKEN_RESTORE = new HashMap<>();
-    /** Сломанные блоки -> индекс фрагмента (не восстанавливать в уже обрушенных) */
-    private static final Map<UUID, Map<BlockPos, Integer>> STAIR_BROKEN_STAGE = new HashMap<>();
-    private record StairCrumble(List<BlockPos> positions, List<net.minecraft.block.BlockState> states,
-                                int stage, long breakTick) {}
-    // ИЗМЕНЕНО ("ступеньки должны ломаться быстрее — локация пробегается насквозь"):
-    // волна стартует почти сразу, треск короче, ряды сыплются чаще
-    /** Пауза после входа на марш перед началом обвала */
-    private static final int STAIR_CRUMBLE_START_DELAY = 8;
-    /** Ряд трещит пару тиков, потом падает; следующий ряд — через 4 тика */
-    private static final int STAIR_CRUMBLE_WARN_TICKS = 2;
-    private static final int STAIR_CRUMBLE_ROW_INTERVAL = 4;
-    /** Сломанный ряд "заживает" обратно через 4.5 сек — марш можно пройти снова */
-    private static final int STAIR_CRUMBLE_RESTORE_TICKS = 90;
-
-    // ===== ДОБАВЛЕНО (сон "Пустота с глазами", фидбек "не хватает движа в начале") =====
-    // ===== ДОБАВЛЕНО ("текст во снах быстро пропадает"): долгие подсказки =====
-    // Ванильный экшенбар держит сообщение ~3 секунды — важные инструкции не успевают
-    // прочитать. showHint() держит текст указанное время, переотправляя его каждые
-    // 1,25 секунды, пока не истечёт срок (см. tickHints).
-    private record ActiveHint(String text, long untilTick) {}
-    private static final Map<UUID, ActiveHint> ACTIVE_HINTS = new HashMap<>();
-
-    /** Показывает подсказку в экшенбаре и держит её seconds секунд. */
-    public static void showHint(ServerPlayerEntity player, String text, int seconds) {
-        // ИЗМЕНЕНО ("текст слишком большой, который снизу пишется — перенеси в чат"):
-        // длинные подсказки (>60 символов) в actionbar нечитаемы и перекрывают чат —
-        // отправляем их ОДИН раз в чат, где их можно спокойно перечитать.
-        // Короткие подсказки остаются в actionbar с переотправкой.
-        if (text.length() > 60) {
-            player.sendMessage(net.minecraft.text.Text.literal(text), false);
-            return;
-        }
-        long until = ((ServerWorld) player.getEntityWorld()).getServer().getTicks() + seconds * 20L;
-        ACTIVE_HINTS.put(player.getUuid(), new ActiveHint(text, until));
-        player.sendMessage(net.minecraft.text.Text.literal(text), true);
-    }
-
-    /** Переотправляет активные подсказки, чтобы они не гасли. Вызывается каждый тик. */
-    public static void tickHints(MinecraftServer server) {
-        if (ACTIVE_HINTS.isEmpty()) return;
-        long now = server.getTicks();
-        for (Map.Entry<UUID, ActiveHint> entry : new ArrayList<>(ACTIVE_HINTS.entrySet())) {
-            if (now >= entry.getValue().untilTick()) {
-                ACTIVE_HINTS.remove(entry.getKey());
-                continue;
-            }
-            if (now % 25 != 0) continue;
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(entry.getKey());
-            if (player != null) {
-                player.sendMessage(net.minecraft.text.Text.literal(entry.getValue().text()), true);
-            }
-        }
-    }
-
-    /** Тик входа в сон (ленивая инициализация в tickVoidOfEyes) */
-    private static final Map<UUID, Long> VOE_START_TICK = new HashMap<>();
-
-    // ДОБАВЛЕНО (финал "Пустоты с глазами", механика "Перехвати взгляд"):
-    // сон заканчивался только таймаутом — теперь игрок может ПОБЕДИТЬ: поймать
-    // прямой взгляд Наблюдателя на 3 секунды (60 тиков) — тот сгорает. 5 сгоревших = пробуждение.
-    /** Сколько Наблюдателей уже сожжено взглядом за этот сон (ключ — сессия) */
-    private static final Map<UUID, Integer> VOE_DISPELLED = new HashMap<>();
-    /** Прогресс прицельного взгляда по каждому Наблюдателю (ключ — UUID сущности) */
-    private static final Map<UUID, Integer> VOE_STARE_TICKS = new HashMap<>();
-    /** Кулдаун касания-атаки для каждого Наблюдателя */
-    private static final Map<UUID, Long> VOE_TOUCH_COOLDOWN = new HashMap<>();
-    /** Сколько Наблюдателей нужно сжечь для победы */
-    private static final int VOE_DISPEL_NEEDED = 5;
-    /** Сколько тиков непрерывного прицельного взгляда выдерживает Наблюдатель */
-    private static final int VOE_STARE_TO_DISPEL = 60;
-
-    // ===== ДОБАВЛЕНО (сон "Пустошь зеркал", редизайн "Поймай своё отражение") =====
-    /** Тик входа в сон (ленивая инициализация в tickMirrorWastes) */
-    private static final Map<UUID, Long> MW_START_TICK = new HashMap<>();
-    /** UUID сущности Двойника, идущего по следу игрока */
-    private static final Map<UUID, UUID> MW_DOUBLE = new HashMap<>();
-    /** Координаты блоков текущего зеркала (для снятия при прыжке/пробуждении) */
-    private static final Map<UUID, List<BlockPos>> MW_MIRROR_BLOCKS = new HashMap<>();
-    /** Центр текущего зеркала (нижний блок рамы) */
-    private static final Map<UUID, BlockPos> MW_MIRROR_POS = new HashMap<>();
-    /** Тик следующего самопроизвольного прыжка зеркала */
-    private static final Map<UUID, Long> MW_NEXT_JUMP = new HashMap<>();
-    /** Сколько раз игрок коснулся зеркала (нужно 3) */
-    private static final Map<UUID, Integer> MW_TOUCHES = new HashMap<>();
-    /** До этого тика Двойник не может схватить снова (после захвата отбрасывается) */
-    private static final Map<UUID, Long> MW_DOUBLE_COOLDOWN = new HashMap<>();
-    /** Зеркало появляется через 25 секунд после входа в сон */
-    private static final int MW_MIRROR_DELAY = 500;
-    /** Зеркало стоит на месте 10 секунд, потом прыгает в новую точку */
-    private static final int MW_MIRROR_STAND_TICKS = 200;
-    /** Сколько касаний нужно для выхода из сна */
-    private static final int MW_TOUCHES_NEEDED = 3;
-    /** Рассудок за захват Двойником */
-    private static final float MW_GRAB_SANITY = -12.0f;
-
-    // ===== ДОБАВЛЕНО ("портал в мир снов"): стояние в портале и точка возврата =====
-    /** Сколько тиков игрок стоит в портале снов (нужно 80, как в аду); отрицательное — пауза после телепорта */
-    private static final Map<UUID, Integer> DREAM_PORTAL_STAND = new HashMap<>();
-    /** Куда вернуть игрока в реальный мир (позиция перед входом в портал) */
-    private static final Map<UUID, BlockPos> DREAM_PORTAL_RETURN = new HashMap<>();
-
-    /**
-     * ДОБАВЛЕНО ("повторно попадаешь в сон — он не сбрасывается"): полный сброс локации
-     * сна перед новым заходом. Раньше старые постройки (сломанная лестница, объедки пира,
-     * зеркала), выжившие монстры и per-session счётчики оставались от прошлого сна — игрок
-     * возвращался в "подъехавшую" локацию. Теперь: сносим всё выше платформы, убираем
-     * оставшихся сущностей и обнуляем все стейт-мапы сессии — сон начинается с чистого листа.
-     */
-    private static void resetDreamForNewSession(ServerWorld world, net.minecraft.util.Identifier dreamId, UUID sessionKey) {
-        int surfaceY = ModDimensions.platformSurfaceY(world.getRegistryKey());
-        BlockPos center = new BlockPos(0, surfaceY, 0);
-
-        // 1) Выжившие сущности прошлого захода (монстры, блюда-предметы, маркеры дверей)
-        for (var entity : world.getEntitiesByClass(net.minecraft.entity.Entity.class,
-                new net.minecraft.util.math.Box(center).expand(96, 80, 96),
-                e -> !(e instanceof net.minecraft.entity.player.PlayerEntity)
-                        && !(e instanceof com.somnium.mod.entity.SleepingBodyEntity))) {
-            entity.discard();
-        }
-
-        // 2) Строительные сны: сносим старые постройки над платформой (саму платформу не трогаем)
-        boolean structural = dreamId.equals(SomniumMod.id("falling_planks"))
-                || dreamId.equals(SomniumMod.id("crimson_feast"))
-                || dreamId.equals(SomniumMod.id("mirror_wastes"))
-                || dreamId.equals(SomniumMod.id("mirror_room"))
-                || dreamId.equals(SomniumMod.id("void_of_eyes"));
-        if (structural) {
-            net.minecraft.block.BlockState air = net.minecraft.block.Blocks.AIR.getDefaultState();
-            BlockPos.Mutable pos = new BlockPos.Mutable();
-            for (int x = -24; x <= 24; x++) {
-                for (int z = -24; z <= 24; z++) {
-                    for (int y = surfaceY; y <= surfaceY + 48; y++) {
-                        pos.set(x, y, z);
-                        if (!world.getBlockState(pos).isAir()) {
-                            world.setBlockState(pos, air, 2);
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2.5) Тонущий город: сносим собор прошлого захода (он каждый раз строится
-        // в новом месте) и планируем осушку оставшейся воды — иначе повторный заход
-        // начинался бы в уже затопленном городе ("сон не сбрасывается").
-        if (dreamId.equals(SomniumMod.id("drowning_city"))) {
-            BlockPos oldBell = DROWNING_CITY_BELL_POS.remove(sessionKey);
-            if (oldBell != null) {
-                net.minecraft.block.BlockState airState = net.minecraft.block.Blocks.AIR.getDefaultState();
-                BlockPos.Mutable ruinPos = new BlockPos.Mutable();
-                for (int dx = -6; dx <= 6; dx++) {
-                    for (int dz = -6; dz <= 6; dz++) {
-                        for (int y = DROWNING_CITY_START_Y; y <= DROWNING_CITY_MAX_Y + 6; y++) {
-                            ruinPos.set(oldBell.getX() + dx, y, oldBell.getZ() + dz);
-                            if (!world.getBlockState(ruinPos).isAir()) {
-                                world.setBlockState(ruinPos, airState, 2);
-                            }
-                        }
-                    }
-                }
-            }
-            // Осушку выполняет tickDrowningCityWater (снизу вверх, батчами)
-            DROWNING_CITY_DRAIN_LEVEL.put(sessionKey, DROWNING_CITY_START_Y);
-        }
-
-        // 3) Обнуляем все per-session стейт-мапы
-        STAIR_ORIGIN.remove(sessionKey); STAIR_BUILT_STAGES.remove(sessionKey);
-        STAIR_STAGE_BLOCKS.remove(sessionKey); STAIR_COLLAPSE_NEXT.remove(sessionKey);
-        STAIR_COLLAPSE_QUEUE.remove(sessionKey); STAIR_ROTTEN.remove(sessionKey);
-        STAIR_HATCH.remove(sessionKey); STAIR_CEILING_Y.remove(sessionKey);
-        STAIR_WALL_TOP_Y.remove(sessionKey); STAIR_WAKE_TICK.remove(sessionKey);
-        STAIR_FINAL_ANNOUNCED.remove(sessionKey); STAIR_LAST_SAFE.remove(sessionKey);
-        STAIR_ROTTEN_STAND.remove(sessionKey); STAIR_LAST_FLIGHT_STAGE.remove(sessionKey);
-        STAIR_CRUMBLE_PENDING.remove(sessionKey); STAIR_NEXT_CRUMBLE_TICK.remove(sessionKey);
-        STAIR_BROKEN.remove(sessionKey); STAIR_BROKEN_RESTORE.remove(sessionKey);
-        STAIR_BROKEN_STAGE.remove(sessionKey);
-        FEAST_TABLES.remove(sessionKey); FEAST_DISH_ITEM.remove(sessionKey);
-        FEAST_DISH_TAINTED.remove(sessionKey); FEAST_DISH_DEADLINE.remove(sessionKey);
-        FEAST_DISH_TAKEN.remove(sessionKey); NEXT_DISH_TICK.remove(sessionKey);
-        FEAST_COURSES_DONE.remove(sessionKey); FEAST_TOAST_ITEM.remove(sessionKey);
-        FEAST_GUESTS.remove(sessionKey); FEAST_NEXT_GUEST_SOUND.remove(sessionKey);
-        FEAST_JUDGE_FOCUS_POS.remove(sessionKey); FEAST_JUDGE_FOCUS_UNTIL.remove(sessionKey);
-        MW_START_TICK.remove(sessionKey); MW_DOUBLE.remove(sessionKey);
-        MW_MIRROR_BLOCKS.remove(sessionKey); MW_MIRROR_POS.remove(sessionKey);
-        MW_NEXT_JUMP.remove(sessionKey); MW_TOUCHES.remove(sessionKey);
-        MW_DOUBLE_COOLDOWN.remove(sessionKey);
-        VOE_START_TICK.remove(sessionKey); VOE_DISPELLED.remove(sessionKey);
-        VOE_TOUCH_COOLDOWN.clear(); VOE_STARE_TICKS.clear();
-        MIRROR_ROOM_GLASS.remove(sessionKey); MIRROR_GLASS_BREAK_TIME.remove(sessionKey);
-        MIRROR_ROOM_CORNER.remove(sessionKey); PENDING_MIRROR_INIT.remove(sessionKey);
-        DROWNING_CITY_WATER_LEVEL.remove(sessionKey); DROWNING_CITY_FILL_QUEUE.remove(sessionKey);
-        DROWNING_CITY_AIR_POCKET.remove(sessionKey); DROWNING_CITY_NEXT_BEAM.remove(sessionKey);
-        DROWNING_CITY_DRAIN_QUEUE.remove(sessionKey);
-        MIRROR_ROOM_EXIT.remove(sessionKey); MIRROR_ROOM_NEXT_EXIT_FX.remove(sessionKey);
-        COLLAPSING_MINE_MAZES.remove(sessionKey); COLLAPSING_MINE_ORIGINS.remove(sessionKey);
-        MINE_OPENED_PASSAGES.remove(sessionKey); NEXT_MINE_SHIFT_TICK.remove(sessionKey);
-        MINE_NEXT_SCREAM.remove(sessionKey);
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Лестница в никуда"): строит низ подъезда — мятные стены, уходящие
-     * вниз в пустоту, временный потолок и сразу весь первый этаж (площадка под спавном,
-     // первый марш, междуэтажная площадка с окном, второй марш). Дальше марши
-     * достраиваются по мере подъёма (см. tickFallingPlanks).
-     */
-    private static void setupStairwell(ServerWorld world, BlockPos center, UUID sessionKey) {
-        // ВАЖНО: center — это точка, куда телепортируются НОГИ игрока (см. enterDream).
-        // Поэтому пол первого этажа строится на center.y - 1 (см. buildStairStage) —
-        // иначе игрок оказывается ногами внутри блока пола и его выталкивает в пустоту.
-        // Стены подъезда: мятный призмарин, от восьми блоков ниже входа ("из темноты") до +10
-        buildShaftWalls(world, center, center.getY() - 8, center.getY() + 10);
-        // Временный потолок — поднимается по мере постройки маршей
-        buildShaftCeiling(world, center, center.getY() + 10);
-
-        STAIR_ORIGIN.put(sessionKey, center);
-        STAIR_STAGE_BLOCKS.put(sessionKey, new ArrayList<>());
-        STAIR_COLLAPSE_NEXT.put(sessionKey, 0);
-        STAIR_COLLAPSE_QUEUE.put(sessionKey, new ArrayList<>());
-        STAIR_ROTTEN.put(sessionKey, new java.util.HashSet<>());
-        STAIR_HATCH.remove(sessionKey);
-        STAIR_CEILING_Y.put(sessionKey, center.getY() + 10);
-        STAIR_WALL_TOP_Y.put(sessionKey, center.getY() + 10);
-        STAIR_WAKE_TICK.remove(sessionKey);
-        STAIR_FINAL_ANNOUNCED.remove(sessionKey);
-
-        // Первый этаж строим сразу — игрок спавнится на его площадке
-        for (int stage = 0; stage <= 3; stage++) {
-            buildStairStage(world, center, sessionKey, stage);
-        }
-        STAIR_BUILT_STAGES.put(sessionKey, 4);
-    }
-
-    /** Стены подъезда: мятный призмарин с поясами из призмариновых кирпичей, слои y0..y1. */
-    private static void buildShaftWalls(ServerWorld world, BlockPos center, int y0, int y1) {
-        for (int y = y0; y <= y1; y++) {
-            boolean band = Math.floorMod(y - center.getY(), 4) == 0;
-            var block = band ? net.minecraft.block.Blocks.PRISMARINE_BRICKS
-                             : net.minecraft.block.Blocks.PRISMARINE;
-            for (int x = -3; x <= 3; x++) {
-                for (int z = -13; z <= 1; z++) {
-                    if (Math.abs(x) != 3 && z != -13 && z != 1) continue;
-                    world.setBlockState(new BlockPos(center.getX() + x, y, center.getZ() + z),
-                            block.getDefaultState());
-                }
-            }
-        }
-    }
-
-    /** Потолок над всей клеткой (5×15) на заданной высоте. */
-    private static void buildShaftCeiling(ServerWorld world, BlockPos center, int y) {
-        fillShaftCeiling(world, center, y, net.minecraft.block.Blocks.PRISMARINE_BRICKS.getDefaultState());
-    }
-
-    /** Снимает временный потолок (при подъёме или перед постройкой финального). */
-    private static void clearShaftCeiling(ServerWorld world, BlockPos center, int y) {
-        fillShaftCeiling(world, center, y, net.minecraft.block.Blocks.AIR.getDefaultState());
-    }
-
-    private static void fillShaftCeiling(ServerWorld world, BlockPos center, int y,
-                                         net.minecraft.block.BlockState state) {
-        for (int x = -2; x <= 2; x++) {
-            for (int z = -13; z <= 1; z++) {
-                world.setBlockState(new BlockPos(center.getX() + x, y, center.getZ() + z), state);
-            }
-        }
-    }
-
-    /**
-     * Строит один фрагмент подъезда. Этаж f (+8 высоты) состоит из четырёх фрагментов:
-     * 0 — площадка этажа (x -2..2, z -1..0); 1 — марш на север вдоль западной стены
-     * (x -2..-1, z -2..-9, +0.5 за ступень); 2 — междуэтажная площадка с окном в тьму
-     * (z -12..-10, +4); 3 — марш на юг вдоль восточной стены (x 1..2, z -9..-2, +4.5..+8).
-     * Перила — железная решётка вдоль пролёта (x=0), как в настоящем подъезде.
-     * ВАЖНО: блоки пола строятся на center.y - 1 — ноги игрока телепортируются на center.y,
-     * то есть на ВЕРХНЮЮ грань площадки. Ступени поднимаются ровно по +0.5 от поверхности
-     * площадки и стыкуются с ней вровень, без прыжков.
-     */
-    private static void buildStairStage(ServerWorld world, BlockPos center, UUID sessionKey, int stage) {
-        List<BlockPos> blocks = new ArrayList<>();
-        int floor = stage / 4;
-        int part = stage % 4;
-        int baseY = center.getY() - 1 + floor * 8; // блок площадки этажа (верх грани = уровень ног)
-
-        if (part == 0) {
-            // Площадка этажа
-            for (int x = -2; x <= 2; x++) {
-                for (int z = -1; z <= 0; z++) {
-                    BlockPos pos = new BlockPos(center.getX() + x, baseY, center.getZ() + z);
-                    world.setBlockState(pos, net.minecraft.block.Blocks.POLISHED_ANDESITE.getDefaultState());
-                    blocks.add(pos);
-                }
-            }
-            // Факел душ на боковой стене площадки (сторона чередуется по этажам)
-            boolean west = floor % 2 == 0;
-            BlockPos torchPos = new BlockPos(center.getX() + (west ? -2 : 2), baseY + 2, center.getZ());
-            world.setBlockState(torchPos, net.minecraft.block.Blocks.SOUL_WALL_TORCH.getDefaultState()
-                    .with(net.minecraft.block.WallTorchBlock.FACING,
-                            west ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST));
-            blocks.add(torchPos);
-        } else if (part == 1 || part == 3) {
-            // Марш: 8 ступеней в два ряда вдоль стены + перила вдоль пролёта.
-            // Ступень i стоит на marchBaseY + 1 + i/2: первая на +0.5 над площадкой,
-            // последняя вровень со следующей площадкой — марш идёт без прыжков.
-            boolean first = part == 1;
-            int marchBaseY = first ? baseY : baseY + 4;
-            int startZ = first ? -2 : -9;
-            int stepX1 = first ? -2 : 1;
-            int stepX2 = first ? -1 : 2;
-            // ИСПРАВЛЕНО ("хочу чтобы лестница была ступеньками"): FACING у ступени — это
-            // направление ПОДЪЁМА (полная грань смотрит вверх по маршу). Раньше стояло
-            // направление спуска — каждый второй блок требовал прыжка, марш шёл пилой.
-            net.minecraft.util.math.Direction uphill = first
-                    ? net.minecraft.util.math.Direction.NORTH : net.minecraft.util.math.Direction.SOUTH;
-            for (int i = 0; i < 8; i++) {
-                int z = first ? startZ - i : startZ + i;
-                int y = marchBaseY + 1 + i / 2;
-                var half = i % 2 == 0 ? net.minecraft.block.enums.BlockHalf.BOTTOM
-                                      : net.minecraft.block.enums.BlockHalf.TOP;
-                boolean rotten = floor >= STAIR_ROTTEN_START_FLOOR
-                        && RANDOM.nextDouble() < STAIR_ROTTEN_CHANCE;
-                var stepBlock = rotten ? net.minecraft.block.Blocks.WARPED_STAIRS
-                                       : net.minecraft.block.Blocks.POLISHED_ANDESITE_STAIRS;
-                for (int x : new int[] {stepX1, stepX2}) {
-                    BlockPos pos = new BlockPos(center.getX() + x, y, center.getZ() + z);
-                    world.setBlockState(pos, stepBlock.getDefaultState()
-                            .with(net.minecraft.block.StairsBlock.FACING, uphill)
-                            .with(net.minecraft.block.StairsBlock.HALF, half));
-                    blocks.add(pos);
-                    if (rotten) {
-                        STAIR_ROTTEN.get(sessionKey).add(pos);
-                    } else {
-                        // Подступенок под целой ступенью — марш выглядит монолитным,
-                        // под гнилой ступенью остаётся пустота, чтобы было куда провалиться
-                        BlockPos riser = new BlockPos(center.getX() + x, y - 1, center.getZ() + z);
-                        if (world.getBlockState(riser).isAir()) {
-                            world.setBlockState(riser, net.minecraft.block.Blocks.POLISHED_ANDESITE.getDefaultState());
-                            blocks.add(riser);
-                        }
-                    }
-                }
-                // Перила над ступенью вдоль пролёта
-                BlockPos rail = new BlockPos(center.getX(), y + 1, center.getZ() + z);
-                world.setBlockState(rail, net.minecraft.block.Blocks.IRON_BARS.getDefaultState());
-                blocks.add(rail);
-            }
-        } else {
-            // Междуэтажная площадка с окном в темноту — как на референсе
-            int landY = baseY + 4;
-            for (int x = -2; x <= 2; x++) {
-                for (int z = -12; z <= -10; z++) {
-                    BlockPos pos = new BlockPos(center.getX() + x, landY, center.getZ() + z);
-                    world.setBlockState(pos, net.minecraft.block.Blocks.POLISHED_ANDESITE.getDefaultState());
-                    blocks.add(pos);
-                }
-            }
-            // Окно в торцевой стене — цельное стекло 2×2 вровень со стеной, за ним тьма пустоты
-            for (int x = -1; x <= 0; x++) {
-                for (int y = landY + 1; y <= landY + 2; y++) {
-                    world.setBlockState(new BlockPos(center.getX() + x, y, center.getZ() - 13),
-                            net.minecraft.block.Blocks.GLASS.getDefaultState());
-                }
-            }
-            // Факел душ над площадкой
-            boolean west = floor % 2 == 0;
-            BlockPos torchPos = new BlockPos(center.getX() + (west ? -2 : 2), landY + 2, center.getZ() - 11);
-            world.setBlockState(torchPos, net.minecraft.block.Blocks.SOUL_WALL_TORCH.getDefaultState()
-                    .with(net.minecraft.block.WallTorchBlock.FACING,
-                            west ? net.minecraft.util.math.Direction.EAST : net.minecraft.util.math.Direction.WEST));
-            blocks.add(torchPos);
-        }
-
-        STAIR_STAGE_BLOCKS.get(sessionKey).add(blocks);
-    }
-
-    /** Финал: площадка последнего этажа, глухой потолок и люк со светом пробуждения за ним. */
-    private static void buildStairFinal(ServerWorld world, BlockPos center, UUID sessionKey) {
-        int landingY = center.getY() - 1 + STAIR_FLOORS * 8; // как в buildStairStage: пол на блок ниже уровня ног
-        List<BlockPos> blocks = new ArrayList<>();
-        for (int x = -2; x <= 2; x++) {
-            for (int z = -1; z <= 0; z++) {
-                BlockPos pos = new BlockPos(center.getX() + x, landingY, center.getZ() + z);
-                world.setBlockState(pos, net.minecraft.block.Blocks.POLISHED_ANDESITE.getDefaultState());
-                blocks.add(pos);
-            }
-        }
-        STAIR_STAGE_BLOCKS.get(sessionKey).add(blocks);
-        // Глухой финальный потолок вместо временного
-        int ceilingY = landingY + 5;
-        clearShaftCeiling(world, center, STAIR_CEILING_Y.get(sessionKey));
-        buildShaftWalls(world, center, STAIR_WALL_TOP_Y.get(sessionKey) + 1, ceilingY);
-        buildShaftCeiling(world, center, ceilingY);
-        STAIR_WALL_TOP_Y.put(sessionKey, ceilingY);
-        STAIR_CEILING_Y.put(sessionKey, ceilingY);
-        // Люк над площадкой — за ним свет пробуждения
-        BlockPos hatch = new BlockPos(center.getX(), ceilingY, center.getZ());
-        world.setBlockState(hatch, net.minecraft.block.Blocks.SPRUCE_TRAPDOOR.getDefaultState()
-                .with(net.minecraft.block.TrapdoorBlock.HALF, net.minecraft.block.enums.BlockHalf.BOTTOM)
-                .with(net.minecraft.block.TrapdoorBlock.OPEN, false));
-        world.setBlockState(hatch.up(), net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
-        STAIR_HATCH.put(sessionKey, hatch);
-        // Факел душ на площадке
-        world.setBlockState(new BlockPos(center.getX() - 2, landingY + 2, center.getZ()),
-                net.minecraft.block.Blocks.SOUL_WALL_TORCH.getDefaultState()
-                        .with(net.minecraft.block.WallTorchBlock.FACING, net.minecraft.util.math.Direction.EAST));
-    }
-
-    /**
-     * ИЗМЕНЕНО (сон "Лестница в никуда", бывш. "Падающие доски"): подъезд многоэтажки —
-     * марши достраиваются вверх по мере подъёма и обрушаются за спиной, гнилые ступени
-     * ломаются под ногами, падение мягко возвращает на последнюю безопасную точку.
-     * Выход — люк в потолке последнего этажа (открывается обычным ПКМ).
-     * Поражение — смерть во сне или падение в пустоту вне лестницы (checkFallingPlanksVoidFall).
-     */
-    public static void tickFallingPlanks(MinecraftServer server) {
-        if (ACTIVE.isEmpty()) return;
-        long now = server.getTicks();
-
-        for (UUID playerId : new ArrayList<>(ACTIVE.keySet())) {
-            ActiveDream active = ACTIVE.get(playerId);
-            if (active == null || !active.dreamId().equals(SomniumMod.id("falling_planks"))) {
-                continue; // не наш сон
-            }
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
-            if (player == null || !(player.getEntityWorld() instanceof ServerWorld world)) continue;
-
-            UUID sessionKey = sessionKey(playerId);
-            BlockPos center = STAIR_ORIGIN.get(sessionKey);
-            if (center == null) continue;
-
-            // 0) Защита сцены: на лестнице не должно быть монстров вообще
-            if (now % 10 == 0) {
-                for (net.minecraft.entity.mob.MobEntity mob : world.getEntitiesByClass(
-                        net.minecraft.entity.mob.MobEntity.class,
-                        new net.minecraft.util.math.Box(center).expand(20, 55, 20),
-                        e -> e instanceof net.minecraft.entity.mob.Monster)) {
-                    mob.discard();
-                }
-            }
-
-            // 1) На каком фрагменте игрок (по высоте) и достройка марша вперёд
-            double relY = player.getY() - center.getY();
-            int floor = Math.max(0, (int) Math.floor(relY / 8.0));
-            double r = relY - floor * 8;
-            int part = r < 0.75 ? 0 : r < 4.25 ? 1 : r < 4.75 ? 2 : 3;
-            int playerStage = Math.min(floor * 4 + part, STAIR_FINAL_STAGE);
-
-            int built = STAIR_BUILT_STAGES.getOrDefault(sessionKey, 0);
-            int targetBuilt = Math.min(playerStage + STAIR_BUILD_AHEAD + 1, STAIR_FINAL_STAGE + 1);
-            while (built < targetBuilt) {
-                if (built == STAIR_FINAL_STAGE) {
-                    buildStairFinal(world, center, sessionKey);
-                } else {
-                    buildStairStage(world, center, sessionKey, built);
-                }
-                built++;
-            }
-            STAIR_BUILT_STAGES.put(sessionKey, built);
-            // Поднимаем временный потолок и стены вслед за постройкой (до финала)
-            if (STAIR_HATCH.get(sessionKey) == null) {
-                int neededCeiling = center.getY() + built * 2 + 4;
-                int ceilingY = STAIR_CEILING_Y.getOrDefault(sessionKey, center.getY() + 5);
-                if (neededCeiling > ceilingY) {
-                    clearShaftCeiling(world, center, ceilingY);
-                    buildShaftWalls(world, center, STAIR_WALL_TOP_Y.get(sessionKey) + 1, neededCeiling);
-                    buildShaftCeiling(world, center, neededCeiling);
-                    STAIR_WALL_TOP_Y.put(sessionKey, neededCeiling);
-                    STAIR_CEILING_Y.put(sessionKey, neededCeiling);
-                }
-            }
-
-            // 2) Обрушение за спиной: фрагменты ниже playerStage - STAIR_COLLAPSE_BEHIND
-            int collapseUntil = Math.min(playerStage - STAIR_COLLAPSE_BEHIND, STAIR_FINAL_STAGE);
-            int collapseNext = STAIR_COLLAPSE_NEXT.getOrDefault(sessionKey, 0);
-            List<List<BlockPos>> stageBlocks = STAIR_STAGE_BLOCKS.get(sessionKey);
-            List<BlockPos> collapseQueue = STAIR_COLLAPSE_QUEUE.get(sessionKey);
-            while (collapseNext < collapseUntil && collapseNext < stageBlocks.size()) {
-                collapseQueue.addAll(stageBlocks.get(collapseNext));
-                collapseNext++;
-            }
-            STAIR_COLLAPSE_NEXT.put(sessionKey, collapseNext);
-            if (!collapseQueue.isEmpty() && now % 2 == 0) {
-                BlockPos falling = collapseQueue.remove(0);
-                world.setBlockState(falling, net.minecraft.block.Blocks.AIR.getDefaultState());
-                STAIR_ROTTEN.get(sessionKey).remove(falling);
-                if (falling.getSquaredDistance(player.getBlockPos()) < 500) {
-                    world.playSound(null, falling, net.minecraft.sound.SoundEvents.BLOCK_STONE_BREAK,
-                            net.minecraft.sound.SoundCategory.BLOCKS, 0.9f, 0.7f);
-                    world.spawnParticles(new net.minecraft.particle.BlockStateParticleEffect(
-                                    net.minecraft.particle.ParticleTypes.BLOCK,
-                                    net.minecraft.block.Blocks.POLISHED_ANDESITE.getDefaultState()),
-                            falling.getX() + 0.5, falling.getY() + 0.5, falling.getZ() + 0.5,
-                            10, 0.25, 0.25, 0.25, 0.05);
-                }
-            }
-
-            // 2.5) ОБВАЛ ПРЯМО ПЕРЕД ИГРОКОМ (фидбек "лестница ломалась передо мной и я падал"):
-            //      пока игрок на марше, ряды ступеней впереди по направлению подъёма
-            //      трещат и обрушаются волной. Сломанные блоки "заживают" через ~4.5 сек,
-            //      чтобы марш можно было пройти с новой попытки.
-            BlockPos supportPos = net.minecraft.util.math.BlockPos.ofFloored(
-                    player.getX(), player.getY() - 0.5, player.getZ());
-            int playerPart = playerStage % 4;
-            if (playerStage < STAIR_FINAL_STAGE && (playerPart == 1 || playerPart == 3)) {
-                if (STAIR_LAST_FLIGHT_STAGE.getOrDefault(sessionKey, -1) != playerStage) {
-                    STAIR_LAST_FLIGHT_STAGE.put(sessionKey, playerStage);
-                    STAIR_NEXT_CRUMBLE_TICK.put(sessionKey, now + STAIR_CRUMBLE_START_DELAY);
-                }
-                if (STAIR_CRUMBLE_PENDING.get(sessionKey) == null
-                        && now >= STAIR_NEXT_CRUMBLE_TICK.getOrDefault(sessionKey, now)) {
-                    StairCrumble next = pickCrumbleRow(world, center, sessionKey, playerStage, supportPos, now);
-                    if (next != null) {
-                        STAIR_CRUMBLE_PENDING.put(sessionKey, next);
-                        // Предупреждение: треск и крошка — беги или отступай
-                        for (int ci = 0; ci < next.positions().size(); ci++) {
-                            BlockPos cp = next.positions().get(ci);
-                            world.spawnParticles(new net.minecraft.particle.BlockStateParticleEffect(
-                                            net.minecraft.particle.ParticleTypes.BLOCK,
-                                            next.states().get(ci)),
-                                    cp.getX() + 0.5, cp.getY() + 1.0, cp.getZ() + 0.5,
-                                    4, 0.25, 0.15, 0.25, 0.02);
-                        }
-                        BlockPos first = next.positions().get(0);
-                        world.playSound(null, first, net.minecraft.sound.SoundEvents.BLOCK_STONE_HIT,
-                                net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.5f);
-                    } else {
-                        // Впереди уже всё обрушено — проверимся позже
-                        STAIR_NEXT_CRUMBLE_TICK.put(sessionKey, now + 6);
-                    }
-                }
-            } else {
-                STAIR_LAST_FLIGHT_STAGE.remove(sessionKey);
-            }
-            // Исполнение обвала: ряд падает (вместе с подступенками и перилами)
-            StairCrumble pending = STAIR_CRUMBLE_PENDING.get(sessionKey);
-            if (pending != null && now >= pending.breakTick()) {
-                STAIR_CRUMBLE_PENDING.remove(sessionKey);
-                Map<BlockPos, net.minecraft.block.BlockState> broken =
-                        STAIR_BROKEN.computeIfAbsent(sessionKey, k -> new HashMap<>());
-                Map<BlockPos, Long> restore =
-                        STAIR_BROKEN_RESTORE.computeIfAbsent(sessionKey, k -> new HashMap<>());
-                Map<BlockPos, Integer> brokenStage =
-                        STAIR_BROKEN_STAGE.computeIfAbsent(sessionKey, k -> new HashMap<>());
-                for (int ci = 0; ci < pending.positions().size(); ci++) {
-                    BlockPos cp = pending.positions().get(ci);
-                    world.setBlockState(cp, net.minecraft.block.Blocks.AIR.getDefaultState());
-                    broken.put(cp, pending.states().get(ci));
-                    restore.put(cp, now + STAIR_CRUMBLE_RESTORE_TICKS);
-                    brokenStage.put(cp, pending.stage());
-                }
-                BlockPos first = pending.positions().get(0);
-                world.playSound(null, first, net.minecraft.sound.SoundEvents.BLOCK_STONE_BREAK,
-                        net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.6f);
-                world.spawnParticles(new net.minecraft.particle.BlockStateParticleEffect(
-                                net.minecraft.particle.ParticleTypes.BLOCK,
-                                net.minecraft.block.Blocks.POLISHED_ANDESITE.getDefaultState()),
-                        first.getX() + 0.5, first.getY() + 0.5, first.getZ() + 0.5,
-                        20, 0.5, 0.3, 0.5, 0.06);
-                STAIR_NEXT_CRUMBLE_TICK.put(sessionKey, now + STAIR_CRUMBLE_ROW_INTERVAL);
-            }
-            // "Заживление": сломанные обвалом блоки возвращаются (кроме уже обрушенных
-            // фрагментов за спиной — там пустота навсегда)
-            Map<BlockPos, Long> restoreMap = STAIR_BROKEN_RESTORE.get(sessionKey);
-            if (restoreMap != null && !restoreMap.isEmpty()) {
-                for (BlockPos cp : new ArrayList<>(restoreMap.keySet())) {
-                    if (now < restoreMap.get(cp)) continue;
-                    int st = STAIR_BROKEN_STAGE.get(sessionKey).getOrDefault(cp, 0);
-                    net.minecraft.block.BlockState was = STAIR_BROKEN.get(sessionKey).get(cp);
-                    if (st >= STAIR_COLLAPSE_NEXT.getOrDefault(sessionKey, 0)
-                            && was != null && world.getBlockState(cp).isAir()) {
-                        world.setBlockState(cp, was);
-                        world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL,
-                                cp.getX() + 0.5, cp.getY() + 0.8, cp.getZ() + 0.5,
-                                3, 0.2, 0.1, 0.2, 0.01);
-                    }
-                    restoreMap.remove(cp);
-                    STAIR_BROKEN.get(sessionKey).remove(cp);
-                    STAIR_BROKEN_STAGE.get(sessionKey).remove(cp);
-                }
-            }
-
-            // 3) Гнилые ступени: скрип-предупреждение и пролом под ногами
-            java.util.Set<BlockPos> rotten = STAIR_ROTTEN.get(sessionKey);
-            if (rotten.contains(supportPos) && player.isOnGround()) {
-                int stand = STAIR_ROTTEN_STAND.getOrDefault(playerId, 0) + 1;
-                STAIR_ROTTEN_STAND.put(playerId, stand);
-                if (stand == 1 || stand % 5 == 0) {
-                    world.playSound(null, supportPos, net.minecraft.sound.SoundEvents.BLOCK_WOOD_HIT,
-                            net.minecraft.sound.SoundCategory.BLOCKS, 0.9f, 0.5f);
-                }
-                if (stand >= STAIR_ROTTEN_BREAK_TICKS) {
-                    rotten.remove(supportPos);
-                    STAIR_ROTTEN_STAND.remove(playerId);
-                    world.setBlockState(supportPos, net.minecraft.block.Blocks.AIR.getDefaultState());
-                    world.playSound(null, supportPos, net.minecraft.sound.SoundEvents.BLOCK_WOOD_BREAK,
-                            net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.6f);
-                    world.spawnParticles(new net.minecraft.particle.BlockStateParticleEffect(
-                                    net.minecraft.particle.ParticleTypes.BLOCK,
-                                    net.minecraft.block.Blocks.WARPED_PLANKS.getDefaultState()),
-                            supportPos.getX() + 0.5, supportPos.getY() + 0.5, supportPos.getZ() + 0.5,
-                            20, 0.3, 0.3, 0.3, 0.08);
-                    SanityManager.get(player).addSanity(STAIR_ROTTEN_SANITY);
-                    player.sendMessage(net.minecraft.text.Text.literal(
-                            "§7Гнилая ступень не выдержала!"), true);
-                }
-            } else {
-                STAIR_ROTTEN_STAND.remove(playerId);
-            }
-            if (now % 15 == 0) {
-                int shown = 0;
-                for (BlockPos rotPos : rotten) {
-                    if (shown >= 5) break;
-                    if (rotPos.getSquaredDistance(player.getBlockPos()) < 200) {
-                        world.spawnParticles(net.minecraft.particle.ParticleTypes.WITCH,
-                                rotPos.getX() + 0.5, rotPos.getY() + 1.0, rotPos.getZ() + 0.5,
-                                1, 0.15, 0.05, 0.15, 0.0);
-                        shown++;
-                    }
-                }
-            }
-
-            // 4) Последняя безопасная точка и мягкая ловля падения.
-            // ВАЖНО: гнилые ступени не запоминаем — иначе после пролома телепортировало бы
-            // обратно в пустое место, и игрок падал бы по кругу до смерти.
-            int dz = supportPos.getZ() - center.getZ();
-            if (player.isOnGround() && Math.abs(supportPos.getX() - center.getX()) <= 3
-                    && dz >= -13 && dz <= 1 && !rotten.contains(supportPos)) {
-                var supportBlock = world.getBlockState(supportPos).getBlock();
-                if (supportBlock == net.minecraft.block.Blocks.POLISHED_ANDESITE_STAIRS
-                        || supportBlock == net.minecraft.block.Blocks.WARPED_STAIRS
-                        || supportBlock == net.minecraft.block.Blocks.POLISHED_ANDESITE) {
-                    STAIR_LAST_SAFE.put(playerId, player.getPos());
-                }
-            }
-            net.minecraft.util.math.Vec3d lastSafe = STAIR_LAST_SAFE.get(playerId);
-            if (lastSafe != null && player.getY() < lastSafe.y - STAIR_FALL_CATCH_DEPTH) {
-                player.fallDistance = 0.0f;
-                player.teleport(world, lastSafe.x, lastSafe.y, lastSafe.z,
-                        player.getYaw(), player.getPitch());
-                player.damage(world.getDamageSources().fall(), STAIR_FALL_DAMAGE);
-                SanityManager.get(player).addSanity(STAIR_FALL_SANITY);
-                player.sendMessage(net.minecraft.text.Text.literal(
-                        "§7Ты срываешься в пролёт... и приходишь в себя на ступенях."), true);
-                world.playSound(null, lastSafe.x, lastSafe.y, lastSafe.z,
-                        net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
-                        net.minecraft.sound.SoundCategory.PLAYERS, 0.8f, 0.6f);
-            }
-
-            // 5) Подсказки и сообщение об обрыве
-            if (playerStage < 2 && STAIR_HATCH.get(sessionKey) == null && now % 120 == 0) {
-                player.sendMessage(net.minecraft.text.Text.literal(
-                        "§7Подъезд уходит вверх. Ступени обрушаются за спиной — не стой на месте."), true);
-            }
-            if (playerStage >= STAIR_FINAL_STAGE && !STAIR_FINAL_ANNOUNCED.getOrDefault(sessionKey, false)) {
-                STAIR_FINAL_ANNOUNCED.put(sessionKey, true);
-                player.sendMessage(net.minecraft.text.Text.literal(
-                        "§7Последний этаж. Лестница обрывается — выше только темнота и люк."), true);
-                world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                        net.minecraft.sound.SoundEvents.ENTITY_WARDEN_HEARTBEAT,
-                        net.minecraft.sound.SoundCategory.AMBIENT, 1.0f, 0.8f);
-            }
-
-            // 6) Люк: ванильное открытие ПКМ (или если сломали) — свет и пробуждение
-            BlockPos hatch = STAIR_HATCH.get(sessionKey);
-            if (hatch != null) {
-                Long wakeTick = STAIR_WAKE_TICK.get(sessionKey);
-                if (wakeTick == null) {
-                    var hatchState = world.getBlockState(hatch);
-                    boolean opened = hatchState.isAir()
-                            || (hatchState.getBlock() == net.minecraft.block.Blocks.SPRUCE_TRAPDOOR
-                                && hatchState.get(net.minecraft.block.TrapdoorBlock.OPEN));
-                    if (opened) {
-                        STAIR_WAKE_TICK.put(sessionKey, now + 25);
-                        player.sendMessage(net.minecraft.text.Text.literal(
-                                "§6Свет бьёт в глаза... ты просыпаешься."), true);
-                        world.playSound(null, hatch, net.minecraft.sound.SoundEvents.ENTITY_PLAYER_LEVELUP,
-                                net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
-                        world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                                hatch.getX() + 0.5, hatch.getY() - 1.5, hatch.getZ() + 0.5,
-                                30, 0.3, 1.2, 0.3, 0.02);
-                    } else if (hatch.getSquaredDistance(player.getBlockPos()) < 36 && now % 60 == 0) {
-                        showHint(player, "§7ПКМ по люку в потолке — выход из сна.", 6);
-                    }
-                } else if (now >= wakeTick) {
-                    wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
-                    continue;
-                }
-            }
-        }
-    }
-
-    /** ДОБАВЛЕНО: полная очистка per-session данных сна "Лестница в никуда" */
-    private static void clearFallingPlanksData(UUID sessionKey) {
-        STAIR_ORIGIN.remove(sessionKey);
-        STAIR_BUILT_STAGES.remove(sessionKey);
-        STAIR_STAGE_BLOCKS.remove(sessionKey);
-        STAIR_COLLAPSE_NEXT.remove(sessionKey);
-        STAIR_COLLAPSE_QUEUE.remove(sessionKey);
-        STAIR_ROTTEN.remove(sessionKey);
-        STAIR_HATCH.remove(sessionKey);
-        STAIR_CEILING_Y.remove(sessionKey);
-        STAIR_WALL_TOP_Y.remove(sessionKey);
-        STAIR_WAKE_TICK.remove(sessionKey);
-        STAIR_FINAL_ANNOUNCED.remove(sessionKey);
-        STAIR_LAST_FLIGHT_STAGE.remove(sessionKey);
-        STAIR_CRUMBLE_PENDING.remove(sessionKey);
-        STAIR_NEXT_CRUMBLE_TICK.remove(sessionKey);
-        STAIR_BROKEN.remove(sessionKey);
-        STAIR_BROKEN_RESTORE.remove(sessionKey);
-        STAIR_BROKEN_STAGE.remove(sessionKey);
-    }
-
-    /**
-     * ДОБАВЛЕНО (фидбек): выбирает следующий ряд ступеней ПРЯМО ПЕРЕД игроком на текущем
-     * марше — ближайший по высоте ряд в направлении подъёма, который ещё стоит. Ряд, на
-     * котором игрок стоит, никогда не крошится. В ряд входят обе колонны ступеней,
-     * подступенки под ними и перила пролёта.
-     */
-    private static StairCrumble pickCrumbleRow(ServerWorld world, BlockPos center, UUID sessionKey,
-                                               int stage, BlockPos supportPos, long now) {
-        List<List<BlockPos>> allStages = STAIR_STAGE_BLOCKS.get(sessionKey);
-        if (allStages == null || stage >= allStages.size()) return null;
-        boolean first = stage % 4 == 1; // марш 1 идёт на север (z убывает), марш 3 — на юг (z растёт)
-        int supZ = supportPos.getZ();
-
-        // Ряды стоящих целых ступеней фрагмента по z (гнилые варпед-ступени пропускаем —
-        // у них своя механика пролома под ногами)
-        Map<Integer, List<BlockPos>> rows = new HashMap<>();
-        Map<Integer, Integer> rowY = new HashMap<>();
-        for (BlockPos pos : allStages.get(stage)) {
-            if (world.getBlockState(pos).getBlock() != net.minecraft.block.Blocks.POLISHED_ANDESITE_STAIRS) {
-                continue;
-            }
-            rows.computeIfAbsent(pos.getZ(), k -> new ArrayList<>()).add(pos);
-            rowY.put(pos.getZ(), pos.getY());
-        }
-        int bestZ = 0;
-        int bestY = Integer.MAX_VALUE;
-        boolean found = false;
-        for (Integer z : rows.keySet()) {
-            boolean ahead = first ? z < supZ : z > supZ;
-            if (!ahead) continue;
-            int y = rowY.get(z);
-            if (y < bestY || (y == bestY && Math.abs(z - supZ) < Math.abs(bestZ - supZ))) {
-                bestY = y;
-                bestZ = z;
-                found = true;
-            }
-        }
-        if (!found) return null;
-        List<BlockPos> positions = new ArrayList<>();
-        List<net.minecraft.block.BlockState> states = new ArrayList<>();
-        for (BlockPos stair : rows.get(bestZ)) {
-            positions.add(stair);
-            states.add(world.getBlockState(stair));
-            BlockPos riser = stair.down();
-            if (world.getBlockState(riser).getBlock() == net.minecraft.block.Blocks.POLISHED_ANDESITE) {
-                positions.add(riser);
-                states.add(world.getBlockState(riser));
-            }
-            BlockPos rail = new BlockPos(center.getX(), stair.getY() + 1, stair.getZ());
-            if (world.getBlockState(rail).getBlock() == net.minecraft.block.Blocks.IRON_BARS) {
-                positions.add(rail);
-                states.add(world.getBlockState(rail));
-            }
-        }
-        return new StairCrumble(positions, states, stage, now + STAIR_CRUMBLE_WARN_TICKS);
+        participant.bodyId = null;
     }
 
     // =====================================================================
-    // ДОБАВЛЕНО (сон "Пустошь зеркал", редизайн "Поймай своё отражение")
-    // Вместо боя с боссом: через ~25 сек в пустоши появляется зеркало — нужно
-    // коснуться его 3 раза, а оно каждые 10 сек (и после каждого касания)
-    // исчезает и блестит в новом месте. По следу игрока идёт Двойник: он не
-    // атакует, но после каждого касания ускоряется; если догонит — забирает
-    // рассудок. 3 касания — зеркало разбивается, игрок просыпается победителем.
+    // Взаимодействия (SomniumEvents)
     // =====================================================================
 
-    /**
-     * Тик сна "Пустошь зеркал". Управляет появлением/прыжками зеркала, касаниями,
-     * преследующим Двойником и защитным свипером от случайных ванильных мобов.
-     */
-    public static void tickMirrorWastes(MinecraftServer server) {
-        if (ACTIVE.isEmpty()) return;
-        long now = server.getTicks();
+    public static ActionResult onUseBlock(ServerPlayerEntity player, Hand hand, BlockHitResult hit) {
+        Participant p = PARTICIPANTS.get(player.getUuid());
+        if (p == null || player.getWorld() != p.session.world) return ActionResult.PASS;
+        ActionResult result = p.session.scenario.onUseBlock(p.session, player, hand, hit);
+        if (result != ActionResult.PASS) return result;
+        if (player.getWorld().getBlockState(hit.getBlockPos()).getBlock() instanceof BedBlock) {
+            // В измерениях снов кровати взрываются, как в Незере — глушим и подсказываем
+            DreamHints.show(player, Text.translatable("somnium.dream.bed_does_not_work").formatted(Formatting.GRAY), 4);
+            return ActionResult.SUCCESS;
+        }
+        return ActionResult.PASS;
+    }
 
-        for (UUID playerId : new ArrayList<>(ACTIVE.keySet())) {
-            ActiveDream active = ACTIVE.get(playerId);
-            if (active == null || !active.dreamId().equals(SomniumMod.id("mirror_wastes"))) {
-                continue; // не наш сон
-            }
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
-            if (player == null || !(player.getEntityWorld() instanceof ServerWorld world)) continue;
+    public static ActionResult onUseItem(ServerPlayerEntity player, Hand hand) {
+        Participant p = PARTICIPANTS.get(player.getUuid());
+        if (p == null || player.getWorld() != p.session.world) return ActionResult.PASS;
+        return p.session.scenario.onUseItem(p.session, player, hand);
+    }
 
-            UUID sessionKey = sessionKey(playerId);
+    public static ActionResult onUseEntity(ServerPlayerEntity player, Hand hand, Entity entity) {
+        Participant p = PARTICIPANTS.get(player.getUuid());
+        if (p == null || player.getWorld() != p.session.world) return ActionResult.PASS;
+        return p.session.scenario.onUseEntity(p.session, player, hand, entity);
+    }
 
-            // 0) Ленивая инициализация: стартовый тик + Двойник по следу
-            if (!MW_START_TICK.containsKey(sessionKey)) {
-                MW_START_TICK.put(sessionKey, now);
-                MW_TOUCHES.put(sessionKey, 0);
-                MW_DOUBLE_COOLDOWN.put(sessionKey, 0L);
-                spawnMirrorDouble(world, player, sessionKey);
-                player.sendMessage(net.minecraft.text.Text.literal(
-                        "§7Пустошь молчит. Что-то идёт за тобой следом — не оглядывайся надолго."), true);
-            }
+    /** Игрок доел/допил предмет (ItemStackMixin) — стек ещё не израсходован. */
+    public static void onFinishUsing(ServerPlayerEntity player, ItemStack stack) {
+        Participant p = PARTICIPANTS.get(player.getUuid());
+        if (p == null || player.getWorld() != p.session.world) return;
+        p.session.scenario.onFinishUsing(p.session, player, stack);
+    }
 
-            // 0.1) Защитный свипер: в пустоши не должно быть случайных монстров,
-            //      кроме нашего Двойника (спавн-правила измерения игра игнорирует)
-            if (now % 10 == 0) {
-                UUID doubleUuid = MW_DOUBLE.get(sessionKey);
-                for (net.minecraft.entity.mob.MobEntity mob : world.getEntitiesByClass(
-                        net.minecraft.entity.mob.MobEntity.class,
-                        new net.minecraft.util.math.Box(player.getBlockPos()).expand(64, 16, 64),
-                        e -> e instanceof net.minecraft.entity.mob.Monster
-                                && !e.getUuid().equals(doubleUuid))) {
-                    mob.discard();
-                }
-            }
-
-            // 1) Появление зеркала через MW_MIRROR_DELAY тиков после входа
-            long startTick = MW_START_TICK.get(sessionKey);
-            if (!MW_MIRROR_POS.containsKey(sessionKey) && now >= startTick + MW_MIRROR_DELAY) {
-                placeMirror(world, player, sessionKey);
-                player.sendMessage(net.minecraft.text.Text.literal(
-                        "§5Где-то в пустоши блеснуло зеркало. Коснись его — три раза, и сон отпустит."), true);
-                world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                        net.minecraft.sound.SoundEvents.BLOCK_AMETHYST_BLOCK_CHIME,
-                        net.minecraft.sound.SoundCategory.AMBIENT, 1.0f, 0.6f);
-            }
-
-            BlockPos mirrorPos = MW_MIRROR_POS.get(sessionKey);
-            if (mirrorPos != null) {
-                // 1.1) Блеск-маяк, чтобы зеркало было видно издалека
-                if (now % 5 == 0) {
-                    world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                            mirrorPos.getX() + 0.5, mirrorPos.getY() + 1.5, mirrorPos.getZ() + 0.5,
-                            2, 0.1, 1.6, 0.1, 0.01);
-                }
-
-                // 1.2) Подсказка-направление каждые 12 секунд, пока зеркало стоит
-                if (now % 240 == 0) {
-                    double dx = mirrorPos.getX() - player.getX();
-                    double dz = mirrorPos.getZ() - player.getZ();
-                    String dir = Math.abs(dx) > Math.abs(dz)
-                            ? (dx > 0 ? "востоке" : "западе")
-                            : (dz > 0 ? "юге" : "севере");
-                    player.sendMessage(net.minecraft.text.Text.literal(
-                            "§7Блеск зеркала — где-то на " + dir + "."), true);
-                }
-
-                // 1.3) Касание: игрок подошёл вплотную к раме
-                double touchDx = player.getX() - (mirrorPos.getX() + 0.5);
-                double touchDz = player.getZ() - (mirrorPos.getZ() + 0.5);
-                double touchDist = Math.sqrt(touchDx * touchDx + touchDz * touchDz);
-                if (touchDist < 2.0 && Math.abs(player.getY() - mirrorPos.getY()) < 4) {
-                    int touches = MW_TOUCHES.getOrDefault(sessionKey, 0) + 1;
-                    MW_TOUCHES.put(sessionKey, touches);
-                    world.playSound(null, mirrorPos, net.minecraft.sound.SoundEvents.BLOCK_GLASS_HIT,
-                            net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.7f);
-                    if (touches >= MW_TOUCHES_NEEDED) {
-                        // Финал: зеркало разбивается — сон отпускает
-                        removeMirrorBlocks(world, sessionKey);
-                        MW_MIRROR_POS.remove(sessionKey);
-                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                                net.minecraft.sound.SoundEvents.BLOCK_GLASS_BREAK,
-                                net.minecraft.sound.SoundCategory.AMBIENT, 1.2f, 0.6f);
-                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                                net.minecraft.sound.SoundEvents.ENTITY_PLAYER_LEVELUP,
-                                net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
-                        world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                                player.getX(), player.getY() + 1.0, player.getZ(),
-                                40, 0.5, 1.0, 0.5, 0.05);
-                        player.sendMessage(net.minecraft.text.Text.literal(
-                                "§6Зеркало разбивается — осколки тают в воздухе. Ты просыпаешься."), true);
-                        wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
-                        continue;
-                    } else {
-                        // Касание засчитано — зеркало в панике прыгает, Двойник ускоряется
-                        player.sendMessage(net.minecraft.text.Text.literal(
-                                "§5Касание " + touches + "/" + MW_TOUCHES_NEEDED
-                                        + ". Зеркало ускользает... а шаги за спиной учащаются."), true);
-                        placeMirror(world, player, sessionKey);
-                    }
-                } else if (now >= MW_NEXT_JUMP.getOrDefault(sessionKey, now)) {
-                    // 1.4) Самопроизвольный прыжок: зеркало не даётся в руки
-                    placeMirror(world, player, sessionKey);
-                    world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                            net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
-                            net.minecraft.sound.SoundCategory.AMBIENT, 0.9f, 0.5f);
-                    if (now % 2 == 0) {
-                        player.sendMessage(net.minecraft.text.Text.literal(
-                                "§7Зеркало растворяется... и блестит уже в другом месте."), true);
-                    }
-                }
-            }
-
-            // 2) Двойник идёт по следу: после каждого касания — быстрее
-            UUID doubleUuid = MW_DOUBLE.get(sessionKey);
-            if (doubleUuid != null) {
-                var doubleEntity = world.getEntity(doubleUuid);
-                if (doubleEntity instanceof com.somnium.mod.entity.nightmare.MirroredDoubleEntity doubleMob
-                        && doubleEntity.isAlive()) {
-                    double dx = player.getX() - doubleMob.getX();
-                    double dz = player.getZ() - doubleMob.getZ();
-                    double dist = Math.sqrt(dx * dx + dz * dz);
-
-                    long grabCooldownUntil = MW_DOUBLE_COOLDOWN.getOrDefault(sessionKey, 0L);
-                    if (dist > 0.5 && now >= grabCooldownUntil && now % 2 == 0) {
-                        // Шаг ~0.09 б/т на старте, +0.035 за каждое касание зеркала
-                        double speed = 0.18 + 0.07 * MW_TOUCHES.getOrDefault(sessionKey, 0);
-                        double step = Math.min(speed * 2, dist - 0.4);
-                        double nx = doubleMob.getX() + dx / dist * step;
-                        double nz = doubleMob.getZ() + dz / dist * step;
-                        doubleMob.setPosition(nx, doubleMob.getY(), nz);
-                        float yaw = (float) (Math.atan2(dz, dx) * 180.0 / Math.PI) - 90.0f;
-                        doubleMob.setYaw(yaw);
-                        doubleMob.setBodyYaw(yaw);
-                        doubleMob.setHeadYaw(yaw);
-                    }
-
-                    // Захват: холод пробирает до костей, Двойника отбрасывает
-                    if (dist < 1.8 && now >= grabCooldownUntil) {
-                        MW_DOUBLE_COOLDOWN.put(sessionKey, now + 120);
-                        SanityManager.get(player).addSanity(MW_GRAB_SANITY);
-                        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                                net.minecraft.entity.effect.StatusEffects.NAUSEA, 120, 0));
-                        player.sendMessage(net.minecraft.text.Text.literal(
-                                "§4Двойник касается тебя — тепло уходит из тела!"), true);
-                        world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                                net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_SCREAM,
-                                net.minecraft.sound.SoundCategory.HOSTILE, 0.8f, 0.5f);
-                        // Отброс Двойника на 15 блоков в случайную сторону
-                        double angle = RANDOM.nextDouble() * Math.PI * 2;
-                        double rx = player.getX() + Math.cos(angle) * 15;
-                        double rz = player.getZ() + Math.sin(angle) * 15;
-                        doubleMob.setPosition(rx, doubleMob.getY(), rz);
-                    }
-
-                    // Жуткий шёпот Двойника каждые ~15 секунд
-                    if (now % 300 == 0) {
-                        world.playSound(null, doubleMob.getX(), doubleMob.getY(), doubleMob.getZ(),
-                                net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_AMBIENT,
-                                net.minecraft.sound.SoundCategory.HOSTILE, 0.7f, 0.5f);
-                    }
-                }
+    /** Звон обычного колокола будит тех, чья кровать в радиусе 5 блоков. */
+    public static void onRealBellRung(ServerWorld world, BlockPos bellPos) {
+        for (Participant p : new ArrayList<>(PARTICIPANTS.values())) {
+            BlockPos bed = p.snapshot.bedPos;
+            if (bed == null || !p.snapshot.returnWorld.equals(world.getRegistryKey())) continue;
+            if (bed.getSquaredDistance(bellPos) > REAL_BELL_RADIUS * REAL_BELL_RADIUS) continue;
+            ServerPlayerEntity sleeper = world.getServer().getPlayerManager().getPlayer(p.playerId);
+            if (sleeper != null && requestWake(sleeper, DreamOutcome.WOKE_EARLY)) {
+                sleeper.sendMessage(Text.translatable("somnium.dream.bell_woke").formatted(Formatting.YELLOW), false);
             }
         }
     }
 
-    /** Спавнит Двойника-тень в 25 блоках от игрока: без ИИ, неуязвим, движется вручную. */
-    private static void spawnMirrorDouble(ServerWorld world, ServerPlayerEntity player, UUID sessionKey) {
-        var doubleMob = new com.somnium.mod.entity.nightmare.MirroredDoubleEntity(
-                com.somnium.mod.registry.ModEntities.MIRRORED_DOUBLE, world);
-        double angle = RANDOM.nextDouble() * Math.PI * 2;
-        double x = player.getX() + Math.cos(angle) * 25;
-        double z = player.getZ() + Math.sin(angle) * 25;
-        int y = ModDimensions.platformSurfaceY(world.getRegistryKey());
-        doubleMob.setPosition(x, y, z);
-        doubleMob.setAiDisabled(true);    // двигаем вручную в тике — он ТЕНЬ, не боец
-        doubleMob.setInvulnerable(true);  // его нельзя убить — только оторваться
-        doubleMob.setSilent(true);
-        doubleMob.setPersistent();
-        world.spawnEntity(doubleMob);
-        MW_DOUBLE.put(sessionKey, doubleMob.getUuid());
-    }
-
-    /**
-     * Переносит зеркало в новую случайную точку в 18–30 блоках от игрока.
-     * Старые блоки снимаются. Зеркало — рама 3×4 из полированного чернита,
-     * середина 1×2 — стекло: "отражение" мерцает частицами-маяком.
-     */
-    private static void placeMirror(ServerWorld world, ServerPlayerEntity player, UUID sessionKey) {
-        removeMirrorBlocks(world, sessionKey);
-
-        double angle = RANDOM.nextDouble() * Math.PI * 2;
-        double dist = 18.0 + RANDOM.nextDouble() * 12.0;
-        int x = (int) Math.round(player.getX() + Math.cos(angle) * dist);
-        int z = (int) Math.round(player.getZ() + Math.sin(angle) * dist);
-        int y = ModDimensions.platformSurfaceY(world.getRegistryKey());
-        BlockPos base = new BlockPos(x, y, z);
-
-        List<BlockPos> placed = new ArrayList<>();
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dy = 0; dy <= 3; dy++) {
-                boolean frame = dx != 0 || dy == 0 || dy == 3;
-                BlockPos pos = base.add(dx, dy, 0);
-                world.setBlockState(pos, frame
-                        ? net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState()
-                        : net.minecraft.block.Blocks.GLASS.getDefaultState());
-                placed.add(pos);
-            }
-        }
-        MW_MIRROR_BLOCKS.put(sessionKey, placed);
-        MW_MIRROR_POS.put(sessionKey, base);
-        MW_NEXT_JUMP.put(sessionKey, (long) world.getServer().getTicks() + MW_MIRROR_STAND_TICKS);
-
-        // Вспышка появления
-        world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL_FIRE_FLAME,
-                x + 0.5, y + 1.5, z + 0.5, 20, 0.6, 1.0, 0.6, 0.02);
-    }
-
-    /** Снимает блоки зеркала из мира (при прыжке или пробуждении). */
-    private static void removeMirrorBlocks(ServerWorld world, UUID sessionKey) {
-        List<BlockPos> placed = MW_MIRROR_BLOCKS.remove(sessionKey);
-        if (placed == null) return;
-        for (BlockPos pos : placed) {
-            var block = world.getBlockState(pos).getBlock();
-            if (block == net.minecraft.block.Blocks.POLISHED_BLACKSTONE
-                    || block == net.minecraft.block.Blocks.GLASS) {
-                world.setBlockState(pos, net.minecraft.block.Blocks.AIR.getDefaultState());
-            }
-        }
-    }
-
-    // =====================================================================
-    // ДОБАВЛЕНО (сон "Пустота с глазами", фидбек "не хватает движа в начале"):
-    // первые 30 секунд во тьме вокруг игрока одна за другой открываются пары
-    // светящихся глаз, сердцебиение ускоряется, а Наблюдатели медленно
-    // сжимают кольцо — сон сразу давит, а не ждёт, пока игрок сам найдёт дверь.
-    // =====================================================================
-
-    /** Тик сна "Пустота с глазами": открывающиеся глаза, сердцебиение, сжатие кольца. */
-    public static void tickVoidOfEyes(MinecraftServer server) {
-        if (ACTIVE.isEmpty()) return;
-        long now = server.getTicks();
-
-        for (UUID playerId : new ArrayList<>(ACTIVE.keySet())) {
-            ActiveDream active = ACTIVE.get(playerId);
-            if (active == null || !active.dreamId().equals(SomniumMod.id("void_of_eyes"))) {
-                continue; // не наш сон
-            }
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
-            if (player == null || !(player.getEntityWorld() instanceof ServerWorld world)) continue;
-
-            UUID sessionKey = sessionKey(playerId);
-
-            // 0) Ленивая инициализация
-            if (!VOE_START_TICK.containsKey(sessionKey)) {
-                VOE_START_TICK.put(sessionKey, now);
-                showHint(player, "§5Ты не один в этой тьме. Смотри Наблюдателям прямо в глаза — твой взгляд жжёт их. "
-                        + "Перехвати " + VOE_DISPEL_NEEDED + " взглядов, чтобы проснуться.", 12);
-            }
-            long elapsed = now - VOE_START_TICK.get(sessionKey);
-
-            // 0.1) Защитный свипер: случайных монстров тут быть не должно
-            if (now % 10 == 0) {
-                for (net.minecraft.entity.mob.MobEntity mob : world.getEntitiesByClass(
-                        net.minecraft.entity.mob.MobEntity.class,
-                        new net.minecraft.util.math.Box(player.getBlockPos()).expand(64, 16, 64),
-                        e -> e instanceof net.minecraft.entity.mob.Monster
-                                && !(e instanceof com.somnium.mod.entity.nightmare.WatcherEntity))) {
-                    mob.discard();
-                }
-            }
-
-            // 1) Первые 30 секунд: во тьме вокруг открываются пары глаз
-            if (elapsed < 600 && now % 40 == 0) {
-                int pairs = 2 + RANDOM.nextInt(2);
-                for (int p = 0; p < pairs; p++) {
-                    double angle = RANDOM.nextDouble() * Math.PI * 2;
-                    double dist = 8.0 + RANDOM.nextDouble() * 7.0;
-                    double ex = player.getX() + Math.cos(angle) * dist;
-                    double ez = player.getZ() + Math.sin(angle) * dist;
-                    double ey = player.getY() + 1.5 + (RANDOM.nextDouble() - 0.5);
-                    // Пара глаз: две светящиеся точки рядом
-                    world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                            ex - 0.22, ey, ez, 1, 0.02, 0.02, 0.02, 0.0);
-                    world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                            ex + 0.22, ey, ez, 1, 0.02, 0.02, 0.02, 0.0);
-                    if (RANDOM.nextInt(3) == 0) {
-                        world.playSound(null, ex, ey, ez,
-                                net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_AMBIENT,
-                                net.minecraft.sound.SoundCategory.AMBIENT, 0.6f, 0.3f);
-                    }
-                }
-            }
-
-            // 2) Сердцебиение ускоряется по мере того, как тьма просыпается
-            if (elapsed < 1200 && now % 100 == 0) {
-                float pitch = (float) (0.6 + Math.min(0.6, elapsed / 2400.0));
-                world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                        net.minecraft.sound.SoundEvents.ENTITY_WARDEN_HEARTBEAT,
-                        net.minecraft.sound.SoundCategory.AMBIENT, 0.9f, pitch);
-            }
-
-            // 3) Кольцо сжимается: каждые 15 секунд Наблюдатели оказываются ближе
-            if (now % 300 == 0) {
-                double radius = Math.max(9.0, 26.0 - (elapsed / 300.0) * 2.5);
-                for (com.somnium.mod.entity.nightmare.WatcherEntity watcher : world.getEntitiesByClass(
-                        com.somnium.mod.entity.nightmare.WatcherEntity.class,
-                        new net.minecraft.util.math.Box(player.getBlockPos()).expand(60, 16, 60),
-                        e -> true)) {
-                    if (watcher.squaredDistanceTo(player) < radius * radius) continue; // уже в кольце
-                    double angle = RANDOM.nextDouble() * Math.PI * 2;
-                    double wx = player.getX() + Math.cos(angle) * radius;
-                    double wz = player.getZ() + Math.sin(angle) * radius;
-                    watcher.setPosition(wx, player.getY(), wz);
-                    float yaw = (float) (Math.atan2(player.getZ() - wz, player.getX() - wx) * 180.0 / Math.PI) - 90.0f;
-                    watcher.setYaw(yaw);
-                    watcher.setHeadYaw(yaw);
-                    world.playSound(null, wx, player.getY(), wz,
-                            net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
-                            net.minecraft.sound.SoundCategory.HOSTILE, 0.5f, 0.4f);
-                }
-            }
-
-            // ДОБАВЛЕНО (финал сна, механика "Перехвати взгляд"): смотришь Наблюдателю
-            // точно в глаза (узкий конус ~8°) 3 секунды подряд — он сгорает. Собери
-            // VOE_DISPEL_NEEDED сгоревших — и сон отпустит тебя ПОБЕДИТЕЛЕМ.
-            java.util.List<com.somnium.mod.entity.nightmare.WatcherEntity> watchers = world.getEntitiesByClass(
-                    com.somnium.mod.entity.nightmare.WatcherEntity.class,
-                    new net.minecraft.util.math.Box(player.getBlockPos()).expand(48, 16, 48),
-                    e -> true);
-
-            // 4) Прицельный взгляд: находим Наблюдателя, в которого упирается перекрестие
-            com.somnium.mod.entity.nightmare.WatcherEntity stareTarget = null;
-            var lookVec = player.getRotationVec(1.0f).normalize();
-            for (com.somnium.mod.entity.nightmare.WatcherEntity watcher : watchers) {
-                if (watcher.squaredDistanceTo(player) > 32 * 32) continue;
-                var toWatcher = watcher.getPos().add(0, watcher.getHeight() * 0.7, 0)
-                        .subtract(player.getEyePos()).normalize();
-                if (lookVec.dotProduct(toWatcher) > 0.99) { // узкий конус ~8°
-                    stareTarget = watcher;
-                    break;
-                }
-            }
-
-            if (stareTarget != null) {
-                int stare = VOE_STARE_TICKS.getOrDefault(stareTarget.getUuid(), 0) + 1;
-                VOE_STARE_TICKS.put(stareTarget.getUuid(), stare);
-
-                // Прогресс: частицы нагрева + цифра в экшенбаре
-                if (stare % 10 == 0) {
-                    world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL_FIRE_FLAME,
-                            stareTarget.getX(), stareTarget.getY() + 1.8, stareTarget.getZ(),
-                            4, 0.25, 0.4, 0.25, 0.01);
-                    player.sendMessage(net.minecraft.text.Text.literal(
-                            "§5Взгляд перехватывается... " + Math.min(100, stare * 100 / VOE_STARE_TO_DISPEL) + "%"), true);
-                }
-
-                if (stare >= VOE_STARE_TO_DISPEL) {
-                    // СГОРЕЛ: вспышка света и крик — тьма теряет одного из своих
-                    VOE_STARE_TICKS.remove(stareTarget.getUuid());
-                    world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                            stareTarget.getX(), stareTarget.getY() + 1.3, stareTarget.getZ(),
-                            60, 0.5, 1.0, 0.5, 0.15);
-                    world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL,
-                            stareTarget.getX(), stareTarget.getY() + 1.3, stareTarget.getZ(),
-                            20, 0.4, 0.8, 0.4, 0.05);
-                    world.playSound(null, stareTarget.getX(), stareTarget.getY(), stareTarget.getZ(),
-                            net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_SCREAM,
-                            net.minecraft.sound.SoundCategory.HOSTILE, 1.5f, 1.6f);
-                    world.playSound(null, stareTarget.getX(), stareTarget.getY(), stareTarget.getZ(),
-                            net.minecraft.sound.SoundEvents.ENTITY_GENERIC_EXTINGUISH_FIRE,
-                            net.minecraft.sound.SoundCategory.HOSTILE, 1.0f, 0.8f);
-                    stareTarget.discard();
-
-                    int dispelled = VOE_DISPELLED.getOrDefault(sessionKey, 0) + 1;
-                    VOE_DISPELLED.put(sessionKey, dispelled);
-                    if (dispelled >= VOE_DISPEL_NEEDED) {
-                        wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
-                        continue;
-                    }
-                    player.sendMessage(net.minecraft.text.Text.literal(
-                            "§5Наблюдатель сгорел! Осталось: " + (VOE_DISPEL_NEEDED - dispelled)), true);
-                }
-            } else if (now % 20 == 0) {
-                // Взгляд потерян — недогоревшие Наблюдатели "остывают"
-                for (UUID wId : new ArrayList<>(VOE_STARE_TICKS.keySet())) {
-                    int left = VOE_STARE_TICKS.get(wId) - 4;
-                    if (left <= 0) VOE_STARE_TICKS.remove(wId);
-                    else VOE_STARE_TICKS.put(wId, left);
-                }
-            }
-
-            // 5) Подкрепление: в пустоте всегда есть на кого смотреть — держим 3 Наблюдателей
-            if (elapsed > 400 && watchers.size() < 3 && now % 120 == 0) {
-                double angle = RANDOM.nextDouble() * Math.PI * 2;
-                double dist = 14.0 + RANDOM.nextDouble() * 10.0;
-                var fresh = com.somnium.mod.registry.ModEntities.WATCHER.create(world);
-                if (fresh != null) {
-                    fresh.refreshPositionAndAngles(
-                            player.getX() + Math.cos(angle) * dist, player.getY(),
-                            player.getZ() + Math.sin(angle) * dist,
-                            (float) (Math.atan2(-Math.sin(angle), -Math.cos(angle)) * 180.0 / Math.PI) - 90.0f, 0.0f);
-                    fresh.setPersistent();
-                    world.spawnEntity(fresh);
-                    world.playSound(null, fresh.getX(), fresh.getY(), fresh.getZ(),
-                            net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
-                            net.minecraft.sound.SoundCategory.HOSTILE, 0.7f, 0.4f);
-                }
-            }
-
-            // 6) Касание пустоты: подпустил Наблюдателя вплотную — он жжёт и отшатывается
-            for (com.somnium.mod.entity.nightmare.WatcherEntity watcher : watchers) {
-                long cd = VOE_TOUCH_COOLDOWN.getOrDefault(watcher.getUuid(), 0L);
-                if (now < cd) continue;
-                if (watcher.squaredDistanceTo(player) < 2.2 * 2.2) {
-                    player.damage(world.getDamageSources().mobAttack(watcher), 5.0f);
-                    SanityManager.get(player).addSanity(-6.0f);
-                    net.minecraft.util.math.Vec3d away = player.getPos().subtract(watcher.getPos()).normalize();
-                    player.addVelocity(away.x * 0.9, 0.35, away.z * 0.9);
-                    player.velocityModified = true;
-                    world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                            net.minecraft.sound.SoundEvents.ENTITY_WARDEN_SONIC_BOOM,
-                            net.minecraft.sound.SoundCategory.HOSTILE, 0.5f, 1.8f);
-                    // Отшатнулся — иначе стоял бы внутри игрока и не давал его "поймать взглядом"
-                    double angle = RANDOM.nextDouble() * Math.PI * 2;
-                    watcher.setPosition(player.getX() + Math.cos(angle) * 14.0,
-                            player.getY(), player.getZ() + Math.sin(angle) * 14.0);
-                    VOE_TOUCH_COOLDOWN.put(watcher.getUuid(), now + 100);
-                }
-            }
-        }
-    }
-
-    // =====================================================================
-    // ДОБАВЛЕНО ("портал в мир снов"): стоишь в портале 4 секунды — переносит
-    // в мир снов (somnium:dream_portal_world); там строится платформа со
-    // встречным порталом, через него — назад в реальный мир к точке входа.
-    // =====================================================================
-
-    /** Тик портала снов: отсчёт стояния в плёнке и телепортация туда-обратно. */
-    public static void tickDreamPortal(MinecraftServer server) {
-        if (DREAM_PORTAL_STAND.isEmpty() && DREAM_PORTAL_FX.isEmpty()
-                && server.getPlayerManager().getPlayerList().isEmpty()) return;
-
-        // Шлейф частиц у недавно перенесённых порталом игроков (3 секунды)
-        if (!DREAM_PORTAL_FX.isEmpty()) {
-            long fxNow = server.getTicks();
-            for (Map.Entry<UUID, Long> fx : new ArrayList<>(DREAM_PORTAL_FX.entrySet())) {
-                if (fxNow >= fx.getValue()) { DREAM_PORTAL_FX.remove(fx.getKey()); continue; }
-                ServerPlayerEntity fxPlayer = server.getPlayerManager().getPlayer(fx.getKey());
-                if (fxPlayer != null && fxNow % 2 == 0
-                        && fxPlayer.getEntityWorld() instanceof ServerWorld fxWorld) {
-                    fxWorld.spawnParticles(net.minecraft.particle.ParticleTypes.REVERSE_PORTAL,
-                            fxPlayer.getX(), fxPlayer.getY() + 1.0, fxPlayer.getZ(),
-                            6, 0.35, 0.6, 0.35, 0.02);
-                }
-            }
-        }
-
-        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-            if (!(player.getEntityWorld() instanceof ServerWorld world)) continue;
-
-            boolean inPortal = world.getBlockState(player.getBlockPos()).getBlock()
-                            == com.somnium.mod.registry.ModBlocks.DREAM_PORTAL
-                    || world.getBlockState(player.getBlockPos().up()).getBlock()
-                            == com.somnium.mod.registry.ModBlocks.DREAM_PORTAL;
-            if (!inPortal) {
-                DREAM_PORTAL_STAND.remove(player.getUuid());
-                continue;
-            }
-
-            int stand = DREAM_PORTAL_STAND.getOrDefault(player.getUuid(), 0) + 1;
-            DREAM_PORTAL_STAND.put(player.getUuid(), stand);
-            // ДОБАВЛЕНО ("эффект, как в обычном портале, — экран штырит"): пока стоишь
-            // в портале, нарастает ванильное покачивание экрана (тошнота) + звук срабатывания
-            if (stand == 10) {
-                player.playSound(net.minecraft.sound.SoundEvents.BLOCK_PORTAL_TRIGGER, 0.5f, 0.9f);
-            }
-            if (stand >= 10) {
-                player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                        net.minecraft.entity.effect.StatusEffects.NAUSEA, 210, 0, true, false));
-            }
-            if (stand == 30) {
-                player.sendMessage(net.minecraft.text.Text.literal(
-                        "§5Граница снов тает под ногами..."), true);
-            }
-            if (stand < 80) continue;
-            // Пауза после телепорта (анти-баунс): уходим в минус, отсчёт начнётся снова
-            DREAM_PORTAL_STAND.put(player.getUuid(), -60);
-
-            if (world.getRegistryKey().equals(ModDimensions.DREAM_PORTAL_WORLD)) {
-                // Назад в реальность — к точке, откуда игрок вошёл
-                ServerWorld overworld = server.getOverworld();
-                BlockPos back = DREAM_PORTAL_RETURN.remove(player.getUuid());
-                if (back == null) back = overworld.getSpawnPos();
-                player.teleport(overworld, back.getX() + 0.5, back.getY(), back.getZ() + 0.5,
-                        player.getYaw(), player.getPitch());
-                player.sendMessage(net.minecraft.text.Text.literal(
-                        "§7Ты выныриваешь из сна обратно в реальность..."), true);
-                overworld.playSound(null, back, net.minecraft.sound.SoundEvents.BLOCK_PORTAL_TRAVEL,
-                        net.minecraft.sound.SoundCategory.PLAYERS, 0.6f, 1.2f);
-                // ДОБАВЛЕНО ("нет эффектов при заходе в портал"): затемнение + частицы + медленное падение
-                applyPortalTravelEffects(player, overworld, back.getX() + 0.5, back.getY() + 1, back.getZ() + 0.5, true);
-            } else {
-                // В мир снов — запоминаем, откуда пришёл
-                DREAM_PORTAL_RETURN.put(player.getUuid(), player.getBlockPos());
-                ServerWorld dreamWorld = server.getWorld(ModDimensions.DREAM_PORTAL_WORLD);
-                if (dreamWorld == null) continue;
-                DreamPortalHelper.ensureDreamPortalBuilt(dreamWorld);
-                double[] arrival = DreamPortalHelper.dreamArrivalPoint();
-                player.teleport(dreamWorld, arrival[0], arrival[1], arrival[2], 180.0f, 0.0f);
-                showHint(player, "§5Ты шагнул в мир снов. Встречный портал на платформе вернёт тебя домой.", 9);
-                dreamWorld.playSound(null, arrival[0], arrival[1], arrival[2],
-                        net.minecraft.sound.SoundEvents.BLOCK_PORTAL_TRAVEL,
-                        net.minecraft.sound.SoundCategory.PLAYERS, 0.6f, 0.8f);
-                applyPortalTravelEffects(player, dreamWorld, arrival[0], arrival[1] + 1, arrival[2], false);
-            }
-        }
-    }
-
-    /**
-     * ДОБАВЛЕНО ("нет эффектов при заходе в портал"): ощущение нырка сквозь сон —
-     * перед глазами темнеет, мир кружится, вокруг взвиваются сонные частицы.
-     */
-    private static void applyPortalTravelEffects(ServerPlayerEntity player, ServerWorld world,
-                                                 double x, double y, double z, boolean wakingUp) {
-        // ИЗМЕНЕНО ("переход без анимации эффектов"): кромешная тьма вместо короткой
-        // слепоты (мягкое затухание), кружение, парение + 3 секунды шлейфа частиц
-        // вокруг игрока (см. DREAM_PORTAL_FX в tickDreamPortal) и титул по центру экрана.
-        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                net.minecraft.entity.effect.StatusEffects.DARKNESS, 90, 0, false, false));
-        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                net.minecraft.entity.effect.StatusEffects.NAUSEA, 220, 0, false, false));
-        player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                net.minecraft.entity.effect.StatusEffects.SLOW_FALLING, 60, 0, false, false));
-        world.spawnParticles(net.minecraft.particle.ParticleTypes.REVERSE_PORTAL,
-                x, y, z, 80, 0.6, 1.0, 0.6, 0.2);
-        world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                x, y, z, 20, 0.5, 0.9, 0.5, 0.06);
-        world.playSound(null, x, y, z,
-                wakingUp ? net.minecraft.sound.SoundEvents.ENTITY_PLAYER_LEVELUP
-                        : net.minecraft.sound.SoundEvents.ENTITY_ENDERMAN_TELEPORT,
-                net.minecraft.sound.SoundCategory.PLAYERS, 0.5f, wakingUp ? 1.4f : 0.6f);
-
-        // Титул по центру экрана
-        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.TitleS2CPacket(
-                net.minecraft.text.Text.literal(wakingUp ? "§7Реальность" : "§5Мир Снов")));
-        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.SubtitleS2CPacket(
-                net.minecraft.text.Text.literal(wakingUp ? "§8...ты вынырнул из сна" : "§8...граница позади")));
-
-        // Шлейф частиц на 3 секунды после перехода
-        DREAM_PORTAL_FX.put(player.getUuid(), world.getServer().getTicks() + 60L);
-    }
-
-    /** Игроки, недавно прошедшие портал снов -> тик окончания шлейфа частиц */
-    private static final Map<UUID, Long> DREAM_PORTAL_FX = new HashMap<>();
-
-    /** Полная очистка per-session данных сна "Пустошь зеркал" */
-    private static void clearMirrorWastesData(ServerWorld world, UUID sessionKey) {
-        removeMirrorBlocks(world, sessionKey);
-        MW_MIRROR_POS.remove(sessionKey);
-        MW_START_TICK.remove(sessionKey);
-        MW_NEXT_JUMP.remove(sessionKey);
-        MW_TOUCHES.remove(sessionKey);
-        MW_DOUBLE_COOLDOWN.remove(sessionKey);
-        UUID doubleUuid = MW_DOUBLE.remove(sessionKey);
-        if (doubleUuid != null) {
-            var doubleEntity = world.getEntity(doubleUuid);
-            if (doubleEntity != null) doubleEntity.discard();
-        }
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Падающие доски"): детектор падения в void. Если игрок падает ниже Y=0
-     * в сне "Падающие доски", это поражение — пробуждение с исходом DIED_IN_DREAM.
-     * Вызывается из тик-обработчика для активных снов.
-     */
-    public static void checkFallingPlanksVoidFall(MinecraftServer server) {
-        if (ACTIVE.isEmpty()) return;
-
-        for (UUID playerId : new ArrayList<>(ACTIVE.keySet())) {
-            ActiveDream active = ACTIVE.get(playerId);
-            if (active == null) continue;
-            if (!active.dreamId().equals(SomniumMod.id("falling_planks"))) continue;
-
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
-            if (player == null) continue;
-
-            // ИСПРАВЛЕНО: падение в пустоту — это поражение, а не "выживание по таймауту"
-            // (раньше падение давало +15 рассудка как победа). Теперь -10, как смерть во сне.
-            if (player.getY() < 0) {
-                wake(player, SanityManager.DreamOutcome.DIED_IN_DREAM);
-            }
-        }
-    }
-
-    private static BlockPos findDreamSpawn(ServerWorld world) {
-        // TODO (Приоритет 2): заменить на поиск специальной структуры "точки входа" сна,
-        // расставленной в NBT-шаблоне локации. Пока — центр мира на высоте первого твёрдого блока.
-        BlockPos center = BlockPos.ORIGIN;
-
-        // ИСПРАВЛЕНО: раньше здесь был world.getTopY(Heightmap.Type.MOTION_BLOCKING, ...),
-        // который в момент самого первого визита игрока в это измерение мог отработать до того,
-        // как хайтмап чанка (0,0) реально досчитался — из-за чего игрок иногда спавнился высоко
-        // в воздухе и разбивался насмерть о плейсхолдер-платформу (см. onDeathInDream/ServerPlayerEntityMixin).
-        // Поверхность плейсхолдер-генератора "minecraft:flat" известна заранее (сумма layers из
-        // data/somnium/dimension/*.json), поэтому используем детерминированное значение —
-        // см. ModDimensions#platformSurfaceY.
-        int y = ModDimensions.platformSurfaceY(world.getRegistryKey());
-
-        return new BlockPos(center.getX(), y, center.getZ());
-    }
-
-    /** Карта игроков в зеркальной комнате -> позиция стеклянной стены */
-    private static final Map<UUID, List<BlockPos>> MIRROR_ROOM_GLASS = new HashMap<>();
-    /** Карта игроков -> тик разбивания стекла (через 15 секунд после входа) */
-    private static final Map<UUID, Long> MIRROR_GLASS_BREAK_TIME = new HashMap<>();
-    /** Карта игроков -> угол комнаты (для расчета позиции монстра) */
-    private static final Map<UUID, BlockPos> MIRROR_ROOM_CORNER = new HashMap<>();
-    /** ИСПРАВЛЕНИЕ: очередь отложенной инициализации MirrorReflection (UUID босса + оставшиеся тики до инициализации) */
-    private static final Map<UUID, MirrorInitData> PENDING_MIRROR_INIT = new HashMap<>();
-
-    // ДОБАВЛЕНО (выход из "Зеркальной комнаты"): после победы над отражением в стене
-    // открывается ниша со светом — "зеркало выхода", шаг в него = пробуждение.
-    /** Центр ниши выхода для каждой сессии (null, пока отражение не побеждено) */
-    private static final Map<UUID, BlockPos> MIRROR_ROOM_EXIT = new HashMap<>();
-    /** Тик следующей порции частиц у зеркала выхода */
-    private static final Map<UUID, Long> MIRROR_ROOM_NEXT_EXIT_FX = new HashMap<>();
-
-    /** Данные для отложенной инициализации зеркального отражения */
-    private record MirrorInitData(UUID bossUuid, int ticksRemaining) {}
-
-    /** ДОБАВЛЕНО: Тонущий город - текущий уровень воды для каждого игрока */
-    private static final Map<UUID, Integer> DROWNING_CITY_WATER_LEVEL = new HashMap<>();
-    /**
-     * ИСПРАВЛЕНО ("пролагивает, когда вода появляется"): очередь позиций очередного
-     * слоя воды, заливаемого БАТЧАМИ по DROWNING_CITY_FILL_BATCH блоков за тик.
-     * Раньше весь слой 321×321 (~103 тыс. позиций) ставился одним махом за один тик —
-     * десятки тысяч setBlockState с флагом 3 (соседские апдейты + пересылка клиенту),
-     * каждый блок воды запускал fluid physics и пересчёт света -> гарантированный
-     * лаг-спайк каждые 6 секунд.
-     */
-    private static final Map<UUID, java.util.ArrayDeque<BlockPos>> DROWNING_CITY_FILL_QUEUE = new HashMap<>();
-    /** Начальный уровень воды в тонущем городе (bedrock 1 + stone 4 + sand 2 = Y=7) */
-    private static final int DROWNING_CITY_START_Y = 7;
-    /** Максимальный уровень воды (высота двери/воздушного кармана) */
-    private static final int DROWNING_CITY_MAX_Y = 80;
-    /**
-     * Как часто поднимается вода (в тиках) - каждые 4 секунды (80 тиков).
-     * ИЗМЕНЕНО: было 120 (6 сек) — при длительности сна 6000 тиков вода успевала
-     * подняться лишь до Y=57, поэтому MAX_Y=80 и "критическое" предупреждение
-     * никогда не срабатывали. С 80 тиками к концу сна вода доходит до ~Y=80.
-     */
-    private static final int DROWNING_CITY_WATER_RISE_INTERVAL = 80;
-    /**
-     * Сколько блоков воды ставится за один тик при заливке слоя (баланс: слой
-     * ~103 тыс. позиций заливается за ~50 тиков = 2.5 секунды — вода поднимается
-     * заметно быстрее, чем раз в 4 секунды "телепортируется" уровень, но без
-     * лаг-спайков: 2048 setBlockState за тик не просаживают сервер).
-     */
-    private static final int DROWNING_CITY_FILL_BATCH = 2048;
-
-    // ДОБАВЛЕНО (выход из "Тонущего города"): затопленный собор с колоколом на вершине.
-    /** Позиция колокола (центр воздушного кармана) для каждой сессии */
-    private static final Map<UUID, BlockPos> DROWNING_CITY_BELL_POS = new HashMap<>();
-    /**
-     * Воздушный карман колокольни — эти позиции НЕЛЬЗЯ заливать водой
-     * (иначе "сухая" комната с колоколом затопилась бы вместе со всем слоем).
-     */
-    private static final Map<UUID, java.util.Set<BlockPos>> DROWNING_CITY_AIR_POCKET = new HashMap<>();
-    /** Тик следующего светового луча-маяка над собором */
-    private static final Map<UUID, Long> DROWNING_CITY_NEXT_BEAM = new HashMap<>();
-    /**
-     * Сброс воды между заходами ("повторно попадаешь в сон — он не сбрасывается"):
-     * уровень слоя, который сейчас ОСУШАЕТСЯ (снизу вверх), null если осушки нет.
-     */
-    private static final Map<UUID, Integer> DROWNING_CITY_DRAIN_LEVEL = new HashMap<>();
-    /** Очередь позиций воды на осушение (батчами, как и заливка) */
-    private static final Map<UUID, java.util.ArrayDeque<BlockPos>> DROWNING_CITY_DRAIN_QUEUE = new HashMap<>();
-
-    /** ДОБАВЛЕНО: Лабиринт шахты - генераторы лабиринтов для каждого игрока */
-    private static final Map<UUID, MazeGenerator> COLLAPSING_MINE_MAZES = new HashMap<>();
-    /** Угол лабиринта (для корректного позиционирования) */
-    private static final Map<UUID, BlockPos> COLLAPSING_MINE_ORIGINS = new HashMap<>();
-
-    // ДОБАВЛЕНО (механика "проходы появляются за спиной" по запросу на collapsing_mine):
-    /** Базовые позиции проходов, открытых этой механикой (для последующего "зарастания") */
-    private static final Map<UUID, List<BlockPos>> MINE_OPENED_PASSAGES = new HashMap<>();
-    /** Тик следующего сдвига стен лабиринта */
-    private static final Map<UUID, Long> NEXT_MINE_SHIFT_TICK = new HashMap<>();
-    /** ДОБАВЛЕНО: тик следующего далёкого крика шахтёра (объявляет о мобе до встречи) */
-    private static final Map<UUID, Long> MINE_NEXT_SCREAM = new HashMap<>();
-    /** Каждые 5 секунд лабиринт "дышит": проход за спиной открывается, другой зарастает */
-    private static final int MINE_SHIFT_INTERVAL = 100;
-    /** Радиус сканирования стен вокруг игрока (в ячейках сетки) */
-    private static final int MINE_SHIFT_RADIUS = 8;
-    /** Сколько открытых механикой проходов держим одновременно — лишние зарастают */
-    private static final int MINE_MAX_OPEN_PASSAGES = 6;
-
-    // ДОБАВЛЕНО (сон "Кровавый пир", редизайн "Последний ужин"):
-    /** Позиции "тарелок" пиршественного стола для каждой сессии */
-    private static final Map<UUID, List<BlockPos>> FEAST_TABLES = new HashMap<>();
-    /** UUID текущего блюда (ItemEntity) на столе */
-    private static final Map<UUID, UUID> FEAST_DISH_ITEM = new HashMap<>();
-    /** Тронуто ли текущее блюдо (true = есть опасно, надо отодвинуть) */
-    private static final Map<UUID, Boolean> FEAST_DISH_TAINTED = new HashMap<>();
-    /** Тик, когда нерешённое блюдо убирают гости (обида за невнимание) */
-    private static final Map<UUID, Long> FEAST_DISH_DEADLINE = new HashMap<>();
-    /** Тик подачи следующего блюда */
-    private static final Map<UUID, Long> NEXT_DISH_TICK = new HashMap<>();
-    /** Сколько блюд уже разрешено (отведано или отодвинуто) из FEAST_COURSES */
-    private static final Map<UUID, Integer> FEAST_COURSES_DONE = new HashMap<>();
-    /** UUID Кубка Тоста — финальный выход из сна */
-    private static final Map<UUID, UUID> FEAST_TOAST_ITEM = new HashMap<>();
-    /** Всего блюд за пир — после них подают кубок */
-    private static final int FEAST_COURSES = 5;
-    /** Пауза между блюдами (~8 сек); первая подача через 5 сек */
-    private static final int FEAST_DISH_INTERVAL = 160;
-    private static final int FEAST_FIRST_DISH_DELAY = 100;
-    /** Блюдо ждёт решения игрока 30 секунд, потом судьи обиженно убирают его */
-    private static final int FEAST_DISH_LIFETIME = 600;
-    /** Рассудок за исходы блюд: съел свежее / съел тронутое / сжёг тронутое /
-     *  сжёг свежее / проигнорировал (судьи убрали сами) */
-    private static final float FEAST_EAT_FRESH_SANITY = 3.0f;
-    private static final float FEAST_EAT_TAINTED_SANITY = -6.0f;
-    private static final float FEAST_BURN_TAINTED_SANITY = 2.0f;
-    private static final float FEAST_BURN_FRESH_SANITY = -2.0f;
-    private static final float FEAST_IGNORED_SANITY = -2.0f;
-    /** Шанс, что поданное блюдо тронуто */
-    private static final double FEAST_TAINTED_CHANCE = 0.45;
-    /** UUID судей пира (неподвижные одержимые за столом) — для взгляда вслед игроку */
-    private static final Map<UUID, List<UUID>> FEAST_GUESTS = new HashMap<>();
-    /** Тик следующего жуткого звука судей */
-    private static final Map<UUID, Long> FEAST_NEXT_GUEST_SOUND = new HashMap<>();
-    /** Блюдо, подожжённое зажигалкой: UUID сущности -> тик, когда оно догорит и исчезнет */
-    private static final Map<UUID, Long> FEAST_BURNING_DISHES = new HashMap<>();
-    /** Как долго блюдо зрелищно горит на столе (1.5 сек) */
-    private static final int FEAST_BURN_TICKS = 30;
-    /** Куда смотрят судьи, когда реагируют на событие (иначе — на игрока) */
-    private static final Map<UUID, BlockPos> FEAST_JUDGE_FOCUS_POS = new HashMap<>();
-    /** Тик, до которого действует фокус судей */
-    private static final Map<UUID, Long> FEAST_JUDGE_FOCUS_UNTIL = new HashMap<>();
-    /** Длительность фокуса судей на событии (3 сек) */
-    private static final int FEAST_JUDGE_FOCUS_TICKS = 60;
-    /** Игроки, которым уже выдали Зажигалку судей (сообщение показываем один раз) */
-    private static final java.util.Set<UUID> FEAST_LIGHTER_GIVEN = new java.util.HashSet<>();
-    /** NBT-метки сонных предметов пира — по ним же чистим инвентарь при пробуждении */
-    private static final String FEAST_LIGHTER_TAG = "somnium_feast_lighter";
-    private static final String FEAST_TOAST_TAG = "somnium_feast_toast";
-    private static final String FEAST_DISH_TAG = "somnium_feast_dish";
-    private static final String FEAST_DISH_TAINTED_TAG = "somnium_feast_tainted";
-    /** Блюдо снято со стола в инвентарь — курс всё ещё ждёт решения (съесть/сжечь) */
-    private static final Map<UUID, Boolean> FEAST_DISH_TAKEN = new HashMap<>();
-
-    /** ДОБАВЛЕНО: Сон-в-сне - сохранённые блоки чанка для каждого игрока */
-    private static final Map<UUID, ChunkSnapshot> DREAM_WITHIN_DREAM_CHUNKS = new HashMap<>();
-    /** Позиция игрока в реальном мире для точного воссоздания */
-    private static final Map<UUID, BlockPos> DREAM_WITHIN_DREAM_ORIGINAL_POS = new HashMap<>();
-    /** Погода реального мира для копирования */
-    private static final Map<UUID, WeatherSnapshot> DREAM_WITHIN_DREAM_ORIGINAL_WEATHER = new HashMap<>();
-    /** Когда начали появляться таблички за спиной */
-    private static final Map<UUID, Long> DREAM_WITHIN_DREAM_SIGN_START = new HashMap<>();
-
-    /** Структура для хранения снимка чанка */
-    private record ChunkSnapshot(
-        Map<BlockPos, net.minecraft.block.BlockState> blocks,
-        BlockPos origin
-    ) {}
-
-    /** Структура для хранения погоды */
-    private record WeatherSnapshot(
-        long timeOfDay,
-        boolean isRaining,
-        boolean isThundering
-    ) {}
-
-    /**
-     * УПРОЩЕНО (сон "Зеркальная комната"): создаёт большую комнату 30×30×8
-     * со стеклянной стеной СТРОГО ПОСЕРЕДИНЕ. Игрок слева, моб справа, расстояния равны.
-     */
-    /**
-     * ИЗМЕНЕНО (мультиплеер): теперь принимает sessionKey (groupId) вместо playerId
-     */
-    private static BlockPos setupMirrorRoomAndGetPlayerSpawn(ServerWorld world, BlockPos center, UUID sessionKey) {
-        // УВЕЛИЧЕНО: размеры комнаты 30×30 блоков, высота 8 блоков
-        int roomSize = 30;
-        int roomHeight = 8;
-
-        // Угол комнаты - центрируем относительно точки спавна (0,0,0)
-        BlockPos roomCorner = center.add(-roomSize/2, 0, -roomSize/2);
-
-        // Строим пол из гладкого кварца
-        for (int x = 0; x < roomSize; x++) {
-            for (int z = 0; z < roomSize; z++) {
-                world.setBlockState(roomCorner.add(x, -1, z),
-                    net.minecraft.block.Blocks.SMOOTH_QUARTZ.getDefaultState());
-            }
-        }
-
-        // Строим стены из кварцевых блоков
-        for (int y = 0; y < roomHeight; y++) {
-            for (int x = 0; x < roomSize; x++) {
-                // Северная и южная стены
-                world.setBlockState(roomCorner.add(x, y, 0),
-                    net.minecraft.block.Blocks.QUARTZ_BLOCK.getDefaultState());
-                world.setBlockState(roomCorner.add(x, y, roomSize-1),
-                    net.minecraft.block.Blocks.QUARTZ_BLOCK.getDefaultState());
-            }
-            for (int z = 0; z < roomSize; z++) {
-                // Западная и восточная стены
-                world.setBlockState(roomCorner.add(0, y, z),
-                    net.minecraft.block.Blocks.QUARTZ_BLOCK.getDefaultState());
-                world.setBlockState(roomCorner.add(roomSize-1, y, z),
-                    net.minecraft.block.Blocks.QUARTZ_BLOCK.getDefaultState());
-            }
-        }
-
-        // Строим потолок из гладкого кварца
-        for (int x = 0; x < roomSize; x++) {
-            for (int z = 0; z < roomSize; z++) {
-                world.setBlockState(roomCorner.add(x, roomHeight, z),
-                    net.minecraft.block.Blocks.SMOOTH_QUARTZ.getDefaultState());
-            }
-        }
-
-        // ИСПРАВЛЕНО: стеклянная стена СТРОГО ПОСЕРЕДИНЕ комнаты
-        // Комната 30×30, центр на X=15, игрок на X=7, моб на X=23
-        List<BlockPos> glassBlocks = new ArrayList<>();
-        int middleX = roomSize / 2; // 15 - СТРОГО ЦЕНТР комнаты
-        for (int y = 0; y < roomHeight; y++) {
-            for (int z = 1; z < roomSize - 1; z++) {
-                BlockPos glassPos = roomCorner.add(middleX, y, z);
-                world.setBlockState(glassPos, net.minecraft.block.Blocks.GLASS.getDefaultState());
-                glassBlocks.add(glassPos);
-            }
-        }
-
-        // Добавляем освещение по всему потолку
-        for (int x = 3; x < roomSize - 3; x += 5) {
-            for (int z = 3; z < roomSize - 3; z += 5) {
-                world.setBlockState(roomCorner.add(x, roomHeight-1, z),
-                    net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState());
-            }
-        }
-
-        // Сохраняем позиции стекла для последующего разбивания
-        MIRROR_ROOM_GLASS.put(sessionKey, glassBlocks);
-        MIRROR_GLASS_BREAK_TIME.put(sessionKey, world.getServer().getTicks() + 400L); // 20 секунд
-        MIRROR_ROOM_CORNER.put(sessionKey, roomCorner);
-
-        // ИСПРАВЛЕНО: игрок спавнится СЛЕВА от стекла с отступом 8 блоков
-        // Стекло на X=15, игрок на X=7 (отступ 8 блоков слева)
-        int playerX = middleX - 8; // 7
-        int centerZ = roomSize / 2; // 15 (центр по Z)
-        return roomCorner.add(playerX, 0, centerZ);
-    }
-
-    /**
-     * ИСПРАВЛЕНО (сон "Зеркальная комната"): моб спавнится ЗЕРКАЛЬНО от игрока относительно стекла.
-     * Комната 30×30, стекло на X=15, игрок на X=7, моб на X=23 (оба на расстоянии 8 блоков от стекла).
-     */
-    public static BlockPos getMirrorMonsterSpawnPos(BlockPos playerSpawn, UUID playerId) {
-        BlockPos roomCorner = MIRROR_ROOM_CORNER.get(playerId);
-        if (roomCorner == null) {
-            // Fallback: моб на +16 блоков от игрока (2 × 8)
-            return playerSpawn.add(16, 0, 0);
-        }
-        // Комната 30×30, стекло на X=15, игрок на X=7, моб на X=23
-        int roomSize = 30;
-        int middleX = roomSize / 2; // 15 (стекло)
-        int mobX = middleX + 8; // 23 (отступ 8 блоков СПРАВА от стекла, как и игрок слева)
-        int mobZ = roomSize / 2; // 15 (центр по Z)
-        return roomCorner.add(mobX, 0, mobZ);
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Зеркальная комната"): проверяет таймер разбивания стекла.
-     * Через 15 секунд после входа стекло разбивается с эффектами.
-     *
-     * ИЗМЕНЕНО (мультиплеер): теперь обходит активных игроков и использует sessionKey
-     */
-    public static void tickMirrorRoomGlass(MinecraftServer server) {
-        if (ACTIVE.isEmpty()) return;
-
-        long now = server.getTicks();
-        // Используем Set для отслеживания уже обработанных sessionKey (избегаем дублирования для группы)
-        var processedSessions = new java.util.HashSet<UUID>();
-
-        for (UUID playerId : new ArrayList<>(ACTIVE.keySet())) {
-            ActiveDream active = ACTIVE.get(playerId);
-            if (active == null || !active.dreamId().equals(SomniumMod.id("mirror_room"))) continue;
-
-            UUID sessionKey = sessionKey(playerId);
-
-            // ---- ДОБАВЛЕНО (выход из сна): шаг в зеркало выхода = пробуждение ----
-            // Проверяется для КАЖДОГО игрока (а не раз на сессию): в свет заходит каждый сам.
-            BlockPos exitPos = MIRROR_ROOM_EXIT.get(sessionKey);
-            if (exitPos != null) {
-                ServerPlayerEntity exitPlayer = server.getPlayerManager().getPlayer(playerId);
-                if (exitPlayer != null) {
-                    double edx = exitPlayer.getX() - (exitPos.getX() + 0.5);
-                    double edy = exitPlayer.getY() - exitPos.getY();
-                    double edz = exitPlayer.getZ() - (exitPos.getZ() + 0.5);
-                    if (edx * edx + edy * edy + edz * edz <= 3.24) { // 1.8 блока — надо войти в нишу
-                        exitPlayer.playSound(com.somnium.mod.registry.ModSounds.EXIT_PORTAL, 1.0f, 1.0f);
-                        if (exitPlayer.getEntityWorld() instanceof ServerWorld exitWorld) {
-                            exitWorld.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                                exitPlayer.getX(), exitPlayer.getY() + 1.0, exitPlayer.getZ(),
-                                40, 0.6, 1.0, 0.6, 0.05);
-                        }
-                        SomniumMod.LOGGER.info("[Mirror Room] Игрок {} шагнул в зеркало выхода",
-                            exitPlayer.getName().getString());
-                        wake(exitPlayer, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
-                        continue;
-                    }
-                }
-            }
-
-            if (processedSessions.contains(sessionKey)) continue; // уже обработали для этой группы
-            processedSessions.add(sessionKey);
-
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
-            if (player == null || !(player.getEntityWorld() instanceof ServerWorld dreamWorld)) continue;
-
-            // ---- Разбивание стеклянной стены через 20 секунд после входа ----
-            Long breakTime = MIRROR_GLASS_BREAK_TIME.get(sessionKey);
-            if (breakTime != null && now >= breakTime) {
-                List<BlockPos> glassBlocks = MIRROR_ROOM_GLASS.get(sessionKey);
-                if (glassBlocks != null && !glassBlocks.isEmpty()) {
-                    // Разбиваем все стеклянные блоки
-                    for (BlockPos glassPos : glassBlocks) {
-                        dreamWorld.setBlockState(glassPos, net.minecraft.block.Blocks.AIR.getDefaultState());
-
-                        // Эффект разбивания стекла
-                        dreamWorld.spawnParticles(
-                            new net.minecraft.particle.BlockStateParticleEffect(
-                                net.minecraft.particle.ParticleTypes.BLOCK,
-                                net.minecraft.block.Blocks.GLASS.getDefaultState()
-                            ),
-                            glassPos.getX() + 0.5, glassPos.getY() + 0.5, glassPos.getZ() + 0.5,
-                            15, 0.3, 0.3, 0.3, 0.1
-                        );
-                    }
-
-                    // Звук разбивающегося зеркала (кастомный)
-                    dreamWorld.playSound(null, glassBlocks.get(glassBlocks.size()/2),
-                        com.somnium.mod.registry.ModSounds.MIRROR_SHATTER,
-                        net.minecraft.sound.SoundCategory.BLOCKS,
-                        2.0f, 0.8f);
-                }
-
-                // Очищаем данные (один раз для всей группы)
-                MIRROR_ROOM_GLASS.remove(sessionKey);
-                MIRROR_GLASS_BREAK_TIME.remove(sessionKey);
-            }
-
-            // ---- ДОБАВЛЕНО (выход из сна): зеркало выхода после победы над отражением ----
-            if (!MIRROR_ROOM_EXIT.containsKey(sessionKey)
-                    && active.bossTargetUuid() != null
-                    && isBossDefeated(player, active.bossTargetUuid())) {
-                BlockPos roomCorner = MIRROR_ROOM_CORNER.get(sessionKey);
-                if (roomCorner != null) {
-                    BlockPos exitCenter = buildMirrorRoomExit(dreamWorld, roomCorner);
-                    MIRROR_ROOM_EXIT.put(sessionKey, exitCenter);
-                    dreamWorld.playSound(null, exitCenter,
-                        com.somnium.mod.registry.ModSounds.EXIT_PORTAL,
-                        net.minecraft.sound.SoundCategory.AMBIENT, 1.6f, 1.0f);
-
-                    // Подсказка всем участникам группы
-                    for (UUID memberId : new ArrayList<>(ACTIVE.keySet())) {
-                        ActiveDream memberActive = ACTIVE.get(memberId);
-                        if (memberActive == null || !memberActive.dreamId().equals(SomniumMod.id("mirror_room"))) continue;
-                        if (!sessionKey.equals(sessionKey(memberId))) continue;
-                        ServerPlayerEntity member = server.getPlayerManager().getPlayer(memberId);
-                        if (member != null) {
-                            showHint(member, "§fОтражение повержено! В стене открылось зеркало выхода — шагни в свет.", 9);
-                        }
-                    }
-                    SomniumMod.LOGGER.info("[Mirror Room] Отражение повержено — зеркало выхода открыто в {}", exitCenter.toShortString());
-                }
-            }
-
-            // Частицы у открытого зеркала выхода (свет, зовущий к себе)
-            BlockPos openExit = MIRROR_ROOM_EXIT.get(sessionKey);
-            if (openExit != null) {
-                long nextFx = MIRROR_ROOM_NEXT_EXIT_FX.getOrDefault(sessionKey, 0L);
-                if (now >= nextFx) {
-                    MIRROR_ROOM_NEXT_EXIT_FX.put(sessionKey, now + 10);
-                    dreamWorld.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                        openExit.getX() + 0.5, openExit.getY() + 1.2, openExit.getZ() + 0.5,
-                        6, 0.8, 0.9, 0.8, 0.01);
-                    dreamWorld.spawnParticles(net.minecraft.particle.ParticleTypes.REVERSE_PORTAL,
-                        openExit.getX() + 0.5, openExit.getY() + 1.2, openExit.getZ() + 0.5,
-                        10, 0.9, 1.0, 0.9, 0.02);
-                }
-            }
-        }
-    }
-
-    /**
-     * ДОБАВЛЕНО (выход из "Зеркальной комнаты"): прорезает в западной стене комнаты
-     * (сторона игрока) проём 3×3 и строит за ним нишу из кварца, "глубина" которой
-     * светится морскими фонарями — зеркало выхода. Возвращает центр ниши: игрок,
-     * дошедший до неё, просыпается с исходом SURVIVED_OBJECTIVE.
-     */
-    private static BlockPos buildMirrorRoomExit(ServerWorld world, BlockPos roomCorner) {
-        net.minecraft.block.BlockState air = net.minecraft.block.Blocks.AIR.getDefaultState();
-        net.minecraft.block.BlockState quartz = net.minecraft.block.Blocks.QUARTZ_BLOCK.getDefaultState();
-        net.minecraft.block.BlockState smoothQuartz = net.minecraft.block.Blocks.SMOOTH_QUARTZ.getDefaultState();
-
-        int midZ = 15; // центр комнаты по Z (комната 30×30)
-
-        // Ниша за стеной: x от -4 до -1 снаружи комнаты, y от -1 до 3, ширина 5
-        for (int x = -4; x <= -1; x++) {
-            for (int y = -1; y <= 3; y++) {
-                for (int z = midZ - 2; z <= midZ + 2; z++) {
-                    BlockPos pos = roomCorner.add(x, y, z);
-                    boolean shell = (x == -4) || (y == -1) || (y == 3) || (z == midZ - 2) || (z == midZ + 2);
-                    world.setBlockState(pos, shell ? (y == -1 ? smoothQuartz : quartz) : air, 2);
-                }
-            }
-        }
-
-        // Проём 3×3 в западной стене (x=0)
-        for (int y = 0; y <= 2; y++) {
-            for (int z = midZ - 1; z <= midZ + 1; z++) {
-                world.setBlockState(roomCorner.add(0, y, z), air, 2);
-            }
-        }
-
-        // Светящаяся "глубина" зеркала — задняя стена ниши из морских фонарей
-        for (int y = 0; y <= 2; y++) {
-            for (int z = midZ - 1; z <= midZ + 1; z++) {
-                world.setBlockState(roomCorner.add(-4, y, z),
-                    net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState(), 2);
-            }
-        }
-
-        // Центр ниши — точка, до которой нужно дойти
-        return roomCorner.add(-2, 0, midZ);
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Тонущий город"): постепенный подъём уровня воды.
-     * Вода поднимается каждые 6 секунд на 1 блок, создавая давление на игрока
-     * добраться до воздушного кармана (двери пробуждения) до того, как вода поднимется до потолка.
-     *
-     * ИЗМЕНЕНО (мультиплеер): теперь использует sessionKey для общего уровня воды группы
-     */
-    public static void tickDrowningCityWater(MinecraftServer server) {
-        if (ACTIVE.isEmpty()) return;
-
-        long now = server.getTicks();
-        var processedSessions = new java.util.HashSet<UUID>();
-
-        for (UUID playerId : new ArrayList<>(ACTIVE.keySet())) {
-            ActiveDream active = ACTIVE.get(playerId);
-            if (active == null || !active.dreamId().equals(SomniumMod.id("drowning_city"))) continue;
-
-            UUID sessionKey = sessionKey(playerId);
-            if (processedSessions.contains(sessionKey)) continue;
-            processedSessions.add(sessionKey);
-
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
-            if (player == null || !(player.getEntityWorld() instanceof ServerWorld dreamWorld)) continue;
-
-            long elapsed = now - active.enterTick();
-
-            // Позиция колокола собора (цель сна) — нужна и для тяги, и для проверки выхода
-            BlockPos bellPos = DROWNING_CITY_BELL_POS.get(sessionKey);
-
-            // Притяжение на дно для ВСЕХ игроков в группе.
-            // ИЗМЕНЕНО ("игрока не тянет на дно", "как залезть на башню"):
-            //  - тяга начинается с 5-й секунды (раньше 20-й — её просто не успевали почувствовать);
-            //  - ВНУТРИ шахты собора тяги НЕТ — иначе подняться по лестнице/пузырьковой
-            //    колонне к колоколу было бы физически невозможно.
-            for (UUID memberId : new ArrayList<>(ACTIVE.keySet())) {
-                ActiveDream memberActive = ACTIVE.get(memberId);
-                if (memberActive == null || !memberActive.dreamId().equals(SomniumMod.id("drowning_city"))) continue;
-                if (!sessionKey.equals(sessionKey(memberId))) continue;
-
-                ServerPlayerEntity member = server.getPlayerManager().getPlayer(memberId);
-                if (member == null) continue;
-
-                boolean insideTower = bellPos != null
-                        && Math.abs(member.getBlockX() - bellPos.getX()) <= 5
-                        && Math.abs(member.getBlockZ() - bellPos.getZ()) <= 5;
-
-                if (elapsed >= 100 && !insideTower
-                        && (member.isSubmergedInWater() || member.isTouchingWater())) {
-                    double secondsSincePull = (elapsed - 100) / 20.0;
-                    double pullStrength = Math.min(0.15 + secondsSincePull * 0.005, 0.35);
-                    net.minecraft.util.math.Vec3d vel = member.getVelocity();
-                    member.setVelocity(vel.x, vel.y - pullStrength, vel.z);
-                    member.velocityDirty = true;
-
-                    if (elapsed % 60 == 0) {
-                        member.sendMessage(
-                            net.minecraft.text.Text.literal("§4§lГлубина тянет вас на дно!"),
-                            true
-                        );
-                    }
-                }
-            }
-
-            // ---- ДОБАВЛЕНО (выход из сна): колокол затопленного собора ----
-            if (bellPos != null) {
-                // Световой маяк над колокольней каждые 4 секунды — виден из любой точки города
-                long nextBeam = DROWNING_CITY_NEXT_BEAM.getOrDefault(sessionKey, 0L);
-                if (now >= nextBeam) {
-                    DROWNING_CITY_NEXT_BEAM.put(sessionKey, now + 80);
-                    for (int beamY = bellPos.getY() + 5; beamY <= bellPos.getY() + 28; beamY += 2) {
-                        dreamWorld.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                            bellPos.getX() + 0.5, beamY, bellPos.getZ() + 0.5,
-                            2, 0.15, 0.4, 0.15, 0.0);
-                    }
-                    dreamWorld.playSound(null, bellPos,
-                        net.minecraft.sound.SoundEvents.BLOCK_BELL_RESONATE,
-                        net.minecraft.sound.SoundCategory.AMBIENT, 2.0f, 1.2f);
-                }
-
-                // Игрок в воздушном кармане у колокола — цель выполнена, просыпается
-                for (UUID memberId : new ArrayList<>(ACTIVE.keySet())) {
-                    ActiveDream memberActive = ACTIVE.get(memberId);
-                    if (memberActive == null || !memberActive.dreamId().equals(SomniumMod.id("drowning_city"))) continue;
-                    if (!sessionKey.equals(sessionKey(memberId))) continue;
-
-                    ServerPlayerEntity member = server.getPlayerManager().getPlayer(memberId);
-                    if (member == null) continue;
-
-                    double bdx = member.getX() - (bellPos.getX() + 0.5);
-                    double bdz = member.getZ() - (bellPos.getZ() + 0.5);
-                    double bdy = member.getY() - bellPos.getY();
-                    if (bdx * bdx + bdz * bdz <= 12.25 && bdy >= -1.0 && bdy <= 4.0) {
-                        dreamWorld.playSound(null, bellPos,
-                            net.minecraft.sound.SoundEvents.BLOCK_BELL_USE,
-                            net.minecraft.sound.SoundCategory.PLAYERS, 2.0f, 1.0f);
-                        member.playSound(com.somnium.mod.registry.ModSounds.EXIT_PORTAL, 1.0f, 1.0f);
-                        dreamWorld.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                            member.getX(), member.getY() + 1.0, member.getZ(),
-                            40, 0.6, 1.0, 0.6, 0.05);
-                        SomniumMod.LOGGER.info("[Drowning City] Игрок {} добрался до колокола собора — выход из сна",
-                            member.getName().getString());
-                        wake(member, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
-                    }
-                }
-            }
-
-            // ---- ДОБАВЛЕНО ("сон не сбрасывается"): осушка воды прошлого захода ----
-            // Заливка из прошлой сессии остаётся в мире навсегда — без осушки повторный
-            // заход начинался бы в уже затопленном городе. Осушаем снизу вверх батчами
-            // (как и заливку), чтобы игрок у спавна получил воздух в первые секунды.
-            Integer drainLevel = DROWNING_CITY_DRAIN_LEVEL.get(sessionKey);
-            if (drainLevel != null) {
-                java.util.ArrayDeque<BlockPos> drainQueue =
-                        DROWNING_CITY_DRAIN_QUEUE.computeIfAbsent(sessionKey, k -> new java.util.ArrayDeque<>());
-                if (drainQueue.isEmpty()) {
-                    if (drainLevel > DROWNING_CITY_MAX_Y) {
-                        // Осушка завершена
-                        DROWNING_CITY_DRAIN_LEVEL.remove(sessionKey);
-                        DROWNING_CITY_DRAIN_QUEUE.remove(sessionKey);
-                        SomniumMod.LOGGER.info("[Drowning City] Осушка воды прошлого захода завершена");
-                    } else {
-                        // Собираем очередной слой в очередь (центр мира, радиус как у заливки)
-                        int radius = 160;
-                        BlockPos.Mutable scanPos = new BlockPos.Mutable();
-                        for (int x = -radius; x <= radius; x++) {
-                            for (int z = -radius; z <= radius; z++) {
-                                scanPos.set(x, drainLevel, z);
-                                if (dreamWorld.getBlockState(scanPos).getBlock() == net.minecraft.block.Blocks.WATER) {
-                                    drainQueue.add(scanPos.toImmutable());
-                                }
-                            }
-                        }
-                        DROWNING_CITY_DRAIN_LEVEL.put(sessionKey, drainLevel + 1);
-                    }
-                }
-                int drained = 0;
-                while (drained < DROWNING_CITY_FILL_BATCH && !drainQueue.isEmpty()) {
-                    BlockPos drainPos = drainQueue.poll();
-                    if (dreamWorld.getBlockState(drainPos).getBlock() == net.minecraft.block.Blocks.WATER) {
-                        dreamWorld.setBlockState(drainPos, net.minecraft.block.Blocks.AIR.getDefaultState(),
-                                net.minecraft.block.Block.NOTIFY_LISTENERS);
-                        drained++;
-                    }
-                }
-                continue; // во время осушки новую заливку не планируем
-            }
-
-            java.util.ArrayDeque<BlockPos> queue =
-                    DROWNING_CITY_FILL_QUEUE.computeIfAbsent(sessionKey, k -> new java.util.ArrayDeque<>());
-
-            Integer currentLevel = DROWNING_CITY_WATER_LEVEL.get(sessionKey);
-            if (currentLevel == null) currentLevel = DROWNING_CITY_START_Y;
-
-            // Новый уровень планируем только когда предыдущий слой полностью долит —
-            // при отставании (лаг/AFK) уровни догоняются последовательно, без фризов.
-            if (queue.isEmpty()) {
-                int expectedWaterLevel = DROWNING_CITY_START_Y + (int)(elapsed / DROWNING_CITY_WATER_RISE_INTERVAL);
-                expectedWaterLevel = Math.min(expectedWaterLevel, DROWNING_CITY_MAX_Y);
-
-                if (expectedWaterLevel > currentLevel) {
-                    int newLevel = currentLevel + 1;
-                    DROWNING_CITY_WATER_LEVEL.put(sessionKey, newLevel);
-
-                    // Сканируем слой и ставим позиции в очередь (минуя воздушный карман колокольни)
-                    enqueueWaterLayer(dreamWorld, player.getBlockPos(), newLevel, queue,
-                            DROWNING_CITY_AIR_POCKET.get(sessionKey));
-
-                    // Звук воды каждые 5 уровней (кастомный — наступающий потоп)
-                    if (newLevel % 5 == 0) {
-                        dreamWorld.playSound(null, player.getBlockPos(),
-                            com.somnium.mod.registry.ModSounds.WATER_RISE,
-                            net.minecraft.sound.SoundCategory.AMBIENT,
-                            1.5f, 0.8f);
-                    }
-
-                    // Предупреждение ВСЕМ игрокам в группе когда вода достигает критического уровня
-                    if (newLevel >= DROWNING_CITY_MAX_Y - 10) {
-                        for (UUID memberId : new ArrayList<>(ACTIVE.keySet())) {
-                            if (!sessionKey.equals(sessionKey(memberId))) continue;
-                            ServerPlayerEntity member = server.getPlayerManager().getPlayer(memberId);
-                            if (member != null) {
-                                member.sendMessage(
-                                    net.minecraft.text.Text.literal("§c§lВода поднимается! Найдите воздушный карман!"),
-                                    false
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Дренируем очередь батчем
-            int placed = 0;
-            while (placed < DROWNING_CITY_FILL_BATCH && !queue.isEmpty()) {
-                BlockPos waterPos = queue.poll();
-                if (dreamWorld.getBlockState(waterPos).isAir()) {
-                    dreamWorld.setBlockState(waterPos, net.minecraft.block.Blocks.WATER.getDefaultState(),
-                            net.minecraft.block.Block.NOTIFY_LISTENERS);
-                    placed++;
-                }
-            }
-        }
-    }
-
-    /**
-     * Собирает в очередь все воздушные позиции слоя Y в радиусе 160 блоков (10 чанков)
-     * вокруг игрока — сама заливка выполняется батчами в tickDrowningCityWater().
-     */
-    private static void enqueueWaterLayer(ServerWorld world, BlockPos center, int y,
-                                          java.util.ArrayDeque<BlockPos> queue,
-                                          java.util.Set<BlockPos> airPocket) {
-        int radius = 160; // 10 чанков = 10 * 16 = 160 блоков
-        for (int x = -radius; x <= radius; x++) {
-            for (int z = -radius; z <= radius; z++) {
-                BlockPos pos = new BlockPos(center.getX() + x, y, center.getZ() + z);
-                // Воздушный карман колокольни НЕ заливаем — иначе цель сна утонула бы
-                if (airPocket != null && airPocket.contains(pos)) continue;
-                if (world.getBlockState(pos).isAir()) {
-                    queue.add(pos);
-                }
-            }
-        }
-    }
-
-    /**
-     * ДОБАВЛЕНО (выход из "Тонущего города"): строит затопленный собор с колокольней
-     * в 36-44 блоках от спавна. Конструкция:
-     *  - башня 9×9 из каменного кирпича (с трещинами/мхом и прорехами — руина), от
-     *    поверхности песка (Y=7) до Y=85;
-     *  - внутри полая шахта 7×7 — она затапливается вместе с городом, по ней нужно
-     *    доплыть до верха (притяжение глубины мешает, в этом и челлендж);
-     *  - на Y=80 (максимальный уровень воды) — сплошной пол, выше него сухая
-     *    колокольня с воздушным карманом (позиции кармана защищены от заливки,
-     *    см. DROWNING_CITY_AIR_POCKET и enqueueWaterLayer);
-     *  - в центре колокольни — КОЛОКОЛ: игрок, добравшийся до него, просыпается
-     *    с исходом SURVIVED_OBJECTIVE (проверка в tickDrowningCityWater);
-     *  - вход — арка 3×3 в стене со стороны спавна на уровне воды;
-     *  - над колокольней периодически поднимается луч из частиц END_ROD (маяк-направление).
-     */
-    private static void setupDrowningCityCathedral(ServerWorld world, BlockPos spawnPos, UUID sessionKey) {
-        double angle = RANDOM.nextDouble() * Math.PI * 2;
-        int dist = 36 + RANDOM.nextInt(9);
-        int cx = spawnPos.getX() + (int) Math.round(Math.cos(angle) * dist);
-        int cz = spawnPos.getZ() + (int) Math.round(Math.sin(angle) * dist);
-
-        int baseY = DROWNING_CITY_START_Y;            // Y=7 — поверхность песка
-        int chamberFloorY = DROWNING_CITY_MAX_Y;      // Y=80 — пол колокольни
-        int wallTopY = chamberFloorY + 5;             // Y=85 — потолок колокольни
-
-        java.util.Set<BlockPos> pocket = new java.util.HashSet<>();
-        BlockPos.Mutable p = new BlockPos.Mutable();
-
-        for (int dx = -4; dx <= 4; dx++) {
-            for (int dz = -4; dz <= 4; dz++) {
-                boolean wall = Math.abs(dx) == 4 || Math.abs(dz) == 4;
-                for (int y = baseY; y <= wallTopY; y++) {
-                    p.set(cx + dx, y, cz + dz);
-                    if (wall) {
-                        // Прорехи в стенах шахты (руина) — но не у самого дна и не у колокольни
-                        if (y > baseY + 2 && y < chamberFloorY - 2 && RANDOM.nextInt(100) < 6) continue;
-                        int roll = RANDOM.nextInt(100);
-                        net.minecraft.block.BlockState state = roll < 55
-                            ? net.minecraft.block.Blocks.STONE_BRICKS.getDefaultState()
-                            : roll < 75
-                                ? net.minecraft.block.Blocks.CRACKED_STONE_BRICKS.getDefaultState()
-                                : roll < 95
-                                    ? net.minecraft.block.Blocks.MOSSY_STONE_BRICKS.getDefaultState()
-                                    : net.minecraft.block.Blocks.PRISMARINE.getDefaultState();
-                        world.setBlockState(p, state, 2);
-                    } else if (y == chamberFloorY || y == wallTopY) {
-                        // Пол и потолок колокольни — сплошные (карман герметичен сверху и снизу)
-                        world.setBlockState(p, net.minecraft.block.Blocks.STONE_BRICKS.getDefaultState(), 2);
-                    } else if (y > chamberFloorY) {
-                        // Внутренность колокольни — защищённый от заливки воздушный карман
-                        pocket.add(p.toImmutable());
-                    }
-                    // Шахта ниже пола колокольни остаётся воздухом — она затопится.
-                }
-            }
-        }
-
-        // Морские фонари по углам колокольни (свет виден сквозь толщу воды)
-        for (int[] corner : new int[][]{{-3, -3}, {-3, 3}, {3, -3}, {3, 3}}) {
-            BlockPos lamp = new BlockPos(cx + corner[0], chamberFloorY + 1, cz + corner[1]);
-            world.setBlockState(lamp, net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState(), 2);
-            pocket.remove(lamp);
-        }
-
-        // Колокол в центре колокольни — цель сна
-        BlockPos bellPos = new BlockPos(cx, chamberFloorY + 1, cz);
-        world.setBlockState(bellPos, net.minecraft.block.Blocks.BELL.getDefaultState()
-            .with(net.minecraft.block.BellBlock.ATTACHMENT, net.minecraft.block.enums.Attachment.FLOOR), 2);
-        pocket.remove(bellPos);
-
-        // Входные арки 3×3 на ВСЕХ ЧЕТЫРЁХ сторонах ("нету входа в эту башню") —
-        // не нужно искать единственную сторону; над каждой аркой пара морских
-        // фонарей, чтобы вход светился издалека.
-        net.minecraft.block.BlockState air = net.minecraft.block.Blocks.AIR.getDefaultState();
-        for (int side = 0; side < 4; side++) {
-            boolean alongX = side < 2;
-            int sign = side % 2 == 0 ? 1 : -1;
-            for (int t = -1; t <= 1; t++) {
-                for (int y = baseY; y <= baseY + 2; y++) {
-                    BlockPos arch = alongX
-                            ? new BlockPos(cx + sign * 4, y, cz + t)
-                            : new BlockPos(cx + t, y, cz + sign * 4);
-                    world.setBlockState(arch, air, 2);
-                }
-                // Фонари над аркой (по краям перемычки)
-                BlockPos lamp = alongX
-                        ? new BlockPos(cx + sign * 4, baseY + 3, cz + t * 2)
-                        : new BlockPos(cx + t * 2, baseY + 3, cz + sign * 4);
-                world.setBlockState(lamp, net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState(), 2);
-            }
-        }
-
-        // Световые "прожилки" на внешних углах башни каждые 12 блоков высоты —
-        // собор виден в темноте издалека (частицы-луч дальше ~32 блоков не рендерятся)
-        for (int y = baseY + 5; y <= wallTopY - 2; y += 12) {
-            for (int[] corner : new int[][]{ {-4, -4}, {-4, 4}, {4, -4}, {4, 4} }) {
-                world.setBlockState(new BlockPos(cx + corner[0], y, cz + corner[1]),
-                        net.minecraft.block.Blocks.SEA_LANTERN.getDefaultState(), 2);
-            }
-        }
-
-        // ДОБАВЛЕНО ("нету дырки, чтобы попасть к колоколу"): лаз 2×2 в полу колокольни
-        // у последней ступени лестницы (виток заканчивается в углу (-3,-3)) — и для
-        // лестницы, и для пузырьковой колонны. Карман (Y=81+) остаётся сухим.
-        for (int hx = -3; hx <= -2; hx++) {
-            for (int hz = -3; hz <= -2; hz++) {
-                world.setBlockState(new BlockPos(cx + hx, chamberFloorY, cz + hz), air, 2);
-            }
-        }
-
-        // ДОБАВЛЕНО ("как залезть на башню — паркур хз"): два независимых способа подняться.
-        //
-        // 1) ВИНТОВАЯ ЛЕСТНИЦА: сплошная спираль из плит вдоль внутренних стен шахты
-        //    от самого дна до пола колокольни. Шаг — 1 блок (поднимаешься без прыжков),
-        //    БЕЗ пропусков — никакого паркура. Позиции спирали — периметр внутренней
-        //    шахты 7×7 (24 позиции на виток), на каждый Y — следующая позиция кольца.
-        java.util.List<int[]> ring = new java.util.ArrayList<>();
-        for (int i = -3; i <= 3; i++) ring.add(new int[]{i, -3});
-        for (int i = -2; i <= 3; i++) ring.add(new int[]{3, i});
-        for (int i = 2; i >= -3; i--) ring.add(new int[]{i, 3});
-        for (int i = 2; i >= -2; i--) ring.add(new int[]{-3, i});
-        for (int y = baseY; y < chamberFloorY; y++) {
-            int[] step = ring.get((y - baseY) % ring.size());
-            int roll = RANDOM.nextInt(100);
-            net.minecraft.block.BlockState slab = (roll < 70
-                    ? net.minecraft.block.Blocks.STONE_BRICK_SLAB
-                    : net.minecraft.block.Blocks.MOSSY_STONE_BRICK_SLAB).getDefaultState();
-            world.setBlockState(new BlockPos(cx + step[0], y, cz + step[1]), slab, 2);
-        }
-        //
-        // 2) ПУЗЫРЬКОВАЯ КОЛОННА: дно шахты выложено песком душ — когда вода зальёт
-        //    шахту, колонна САМА выстрелит игрока наверх (подпёртая лестницей: пузыри
-        //    не тянут вниз на магме, только вверх).
-        for (int dx = -3; dx <= 3; dx++) {
-            for (int dz = -3; dz <= 3; dz++) {
-                world.setBlockState(new BlockPos(cx + dx, baseY - 1, cz + dz),
-                        net.minecraft.block.Blocks.SOUL_SAND.getDefaultState(), 2);
-            }
-        }
-
-        DROWNING_CITY_BELL_POS.put(sessionKey, bellPos);
-        DROWNING_CITY_AIR_POCKET.put(sessionKey, pocket);
-        SomniumMod.LOGGER.info("[Drowning City] Собор с колоколом построен: центр ({}, {}), колокол {}",
-            cx, cz, bellPos.toShortString());
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Обрушающаяся шахта"): создаёт процедурный лабиринт из каменных блоков.
-     * Лабиринт генерируется вокруг центра мира, игрок спавнится в случайной ячейке,
-     * дверь пробуждения в самой дальней точке от игрока.
-     */
-    /**
-     * ИЗМЕНЕНО (мультиплеер): теперь принимает sessionKey (groupId) вместо playerId
-     */
-    private static BlockPos setupCollapsingMineAndGetPlayerSpawn(ServerWorld world, BlockPos center, UUID sessionKey) {
-        // Параметры лабиринта
-        int mazeWidth = 20;  // 20x20 ячеек
-        int mazeHeight = 20;
-        int cellSize = 3;    // Каждая ячейка 3x3 блока
-        int wallHeight = 4;  // Высота стен
-
-        MazeGenerator maze = new MazeGenerator(mazeWidth, mazeHeight, cellSize, RANDOM);
-        maze.generate();
-
-        // Сохраняем для последующего использования
-        COLLAPSING_MINE_MAZES.put(sessionKey, maze);
-
-        // Вычисляем угол лабиринта (центрируем относительно точки спавна)
-        // ИСПРАВЛЕНО: полный размер сетки — (width*2+1) ячеек (ячейки + стены между ними),
-        // раньше лабиринт был смещён относительно центра почти на всю свою ширину
-        int totalSize = (mazeWidth * 2 + 1) * cellSize;
-        BlockPos origin = center.add(-totalSize / 2, 0, -totalSize / 2);
-        COLLAPSING_MINE_ORIGINS.put(sessionKey, origin);
-
-        // Строим лабиринт в мире
-        buildMazeInWorld(world, maze, origin, wallHeight);
-
-        // Находим позицию спавна игрока
-        // ИСПРАВЛЕНО: baseY в MazeGenerator ПРИБАВЛЯЕТСЯ к origin.y (origin.add(x, baseY, z)),
-        // а сюда передавался абсолютный center.getY() — высота удваивалась, и игрок
-        // появлялся высоко НАД лабиринтом. Передаём 0: уровень пола уже в origin.
-        return maze.findSpawnPosition(origin, 0);
-    }
-
-    /**
-     * Строит физический лабиринт в мире из блоков
-     */
-    private static void buildMazeInWorld(ServerWorld world, MazeGenerator maze, BlockPos origin, int wallHeight) {
-        int gridWidth = maze.getWidth() * 2 + 1;
-        int gridHeight = maze.getHeight() * 2 + 1;
-        int cellSize = maze.getCellSize();
-
-        // Строим пол из каменных кирпичей
-        for (int x = 0; x < gridWidth * cellSize; x++) {
-            for (int z = 0; z < gridHeight * cellSize; z++) {
-                world.setBlockState(origin.add(x, -1, z),
-                    net.minecraft.block.Blocks.STONE_BRICKS.getDefaultState());
-            }
-        }
-
-        // Строим стены
-        for (int gridX = 0; gridX < gridWidth; gridX++) {
-            for (int gridZ = 0; gridZ < gridHeight; gridZ++) {
-                if (maze.isWall(gridX, gridZ)) {
-                    // Это стена - строим блоки
-                    for (int x = 0; x < cellSize; x++) {
-                        for (int z = 0; z < cellSize; z++) {
-                            int worldX = gridX * cellSize + x;
-                            int worldZ = gridZ * cellSize + z;
-
-                            for (int y = 0; y < wallHeight; y++) {
-                                // Чередуем блоки для атмосферы шахты
-                                net.minecraft.block.Block block;
-                                if (y == 0 || RANDOM.nextFloat() < 0.8f) {
-                                    block = net.minecraft.block.Blocks.DEEPSLATE;
-                                } else {
-                                    block = net.minecraft.block.Blocks.COAL_ORE;
-                                }
-                                world.setBlockState(origin.add(worldX, y, worldZ), block.getDefaultState());
-                            }
-                        }
-                    }
-                } else {
-                    // Это проход - добавляем освещение (факелы на стенах)
-                    if (RANDOM.nextFloat() < 0.15f) {
-                        int centerX = gridX * cellSize + cellSize / 2;
-                        int centerZ = gridZ * cellSize + cellSize / 2;
-
-                        // ИСПРАВЛЕНО ("факелы спавнятся в воздухе по центру"): раньше факел ставился
-                        // в ЦЕНТР прохода дефолтным состоянием WALL_TORCH без свойства FACING — то есть
-                        // без опоры он просто висел в воздухе (и рано или поздно "высыпался"). Теперь
-                        // факел ставится в блок прохода, вплотную примыкающий к стене, с корректным
-                        // FACING (направлен от стены в проход) и только к ортогональному соседу —
-                        // диагональная "стена" опорой для настенного факела быть не может.
-                        boolean torchPlaced = false;
-                        for (int dx = -1; dx <= 1 && !torchPlaced; dx++) {
-                            for (int dz = -1; dz <= 1 && !torchPlaced; dz++) {
-                                if ((dx == 0) == (dz == 0)) continue; // только ортогональные соседи
-                                if (maze.isWall(gridX + dx, gridZ + dz)) {
-                                    net.minecraft.util.math.Direction facing =
-                                            dx == 1 ? net.minecraft.util.math.Direction.WEST :
-                                            dx == -1 ? net.minecraft.util.math.Direction.EAST :
-                                            dz == 1 ? net.minecraft.util.math.Direction.NORTH :
-                                            net.minecraft.util.math.Direction.SOUTH;
-                                    world.setBlockState(origin.add(centerX + dx, 1, centerZ + dz),
-                                            net.minecraft.block.Blocks.WALL_TORCH.getDefaultState()
-                                                    .with(net.minecraft.block.WallTorchBlock.FACING, facing));
-                                    torchPlaced = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Строим потолок из каменных блоков
-        for (int x = 0; x < gridWidth * cellSize; x++) {
-            for (int z = 0; z < gridHeight * cellSize; z++) {
-                world.setBlockState(origin.add(x, wallHeight, z),
-                    net.minecraft.block.Blocks.DEEPSLATE.getDefaultState());
-            }
-        }
-    }
-
-    /**
-     * ДОБАВЛЕНО (механика "проходы появляются за спиной" по запросу на collapsing_mine):
-     * каждые MINE_SHIFT_INTERVAL тиков лабиринт меняется, пока игрок не смотрит:
-     *  - случайная стена ПОЗАДИ игрока (вне угла обзора ~100°) обрушается, открывая
-     *    новый проход (звук + частицы);
-     *  - один из ранее открытых проходов зарастает обратно — тоже только вне поля
-     *    зрения и не под ногами игрока.
-     * Открытые механикой проходы не меняют карту MazeGenerator — дверь остаётся
-     * достижимой по исходному лабиринту, а сдвиги добавляют короткие пути.
-     */
-    /**
-     * ИЗМЕНЕНО (мультиплеер): теперь обходит активных игроков и использует sessionKey
-     */
-    public static void tickCollapsingMine(MinecraftServer server) {
-        if (ACTIVE.isEmpty()) return;
-        long now = server.getTicks();
-        var processedSessions = new java.util.HashSet<UUID>();
-
-        for (UUID playerId : new ArrayList<>(ACTIVE.keySet())) {
-            ActiveDream active = ACTIVE.get(playerId);
-            if (active == null || !active.dreamId().equals(SomniumMod.id("collapsing_mine"))) continue;
-
-            UUID sessionKey = sessionKey(playerId);
-            if (processedSessions.contains(sessionKey)) continue;
-            processedSessions.add(sessionKey);
-
-            Long nextShift = NEXT_MINE_SHIFT_TICK.get(sessionKey);
-            if (nextShift != null && now < nextShift) continue;
-
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
-            MazeGenerator maze = COLLAPSING_MINE_MAZES.get(sessionKey);
-            BlockPos origin = COLLAPSING_MINE_ORIGINS.get(sessionKey);
-            if (player == null || maze == null || origin == null
-                    || !(player.getEntityWorld() instanceof ServerWorld world)) continue;
-
-            // ДОБАВЛЕНО ("в шахте-лабиринте нету нового моба"): далёкий крик шахтёра
-            // раз в ~25-40 секунд — игрок СЛЫШИТ, что моб где-то в лабиринте, ещё до встречи.
-            long nextScream = MINE_NEXT_SCREAM.getOrDefault(sessionKey, 0L);
-            if (now >= nextScream) {
-                MINE_NEXT_SCREAM.put(sessionKey, now + 500 + RANDOM.nextInt(300));
-                world.playSound(null, player.getBlockPos(),
-                        com.somnium.mod.registry.ModSounds.MINER_SCREAM,
-                        net.minecraft.sound.SoundCategory.AMBIENT, 0.5f, 0.7f);
-            }
-
-            NEXT_MINE_SHIFT_TICK.put(sessionKey, now + MINE_SHIFT_INTERVAL);
-
-            int cellSize = maze.getCellSize();
-            double yawRad = Math.toRadians(player.getYaw());
-            double lookX = -Math.sin(yawRad);
-            double lookZ = Math.cos(yawRad);
-            int gridW = maze.getWidth() * 2 + 1;
-            int gridH = maze.getHeight() * 2 + 1;
-            int pgx = (player.getBlockX() - origin.getX()) / cellSize;
-            int pgz = (player.getBlockZ() - origin.getZ()) / cellSize;
-
-            // --- Открываем случайную стену за спиной ---
-            List<int[]> candidates = new ArrayList<>();
-            for (int gx = Math.max(1, pgx - MINE_SHIFT_RADIUS); gx <= Math.min(gridW - 2, pgx + MINE_SHIFT_RADIUS); gx++) {
-                for (int gz = Math.max(1, pgz - MINE_SHIFT_RADIUS); gz <= Math.min(gridH - 2, pgz + MINE_SHIFT_RADIUS); gz++) {
-                    if (!maze.isWall(gx, gz)) continue;
-                    // Стена должна разделять два прохода — иначе обрушение ведёт в никуда
-                    boolean splitsX = !maze.isWall(gx - 1, gz) && !maze.isWall(gx + 1, gz);
-                    boolean splitsZ = !maze.isWall(gx, gz - 1) && !maze.isWall(gx, gz + 1);
-                    if (!splitsX && !splitsZ) continue;
-                    if (isInPlayerView(player, lookX, lookZ, origin, gx, gz, cellSize)) continue; // только за спиной
-                    candidates.add(new int[]{gx, gz});
-                }
-            }
-            if (!candidates.isEmpty()) {
-                int[] pick = candidates.get(RANDOM.nextInt(candidates.size()));
-                BlockPos base = origin.add(pick[0] * cellSize, 0, pick[1] * cellSize);
-                for (int x = 0; x < cellSize; x++) {
-                    for (int z = 0; z < cellSize; z++) {
-                        for (int y = 0; y < 3; y++) {
-                            world.setBlockState(base.add(x, y, z), net.minecraft.block.Blocks.AIR.getDefaultState());
-                        }
-                    }
-                }
-                MINE_OPENED_PASSAGES.computeIfAbsent(sessionKey, k -> new ArrayList<>()).add(base);
-                world.playSound(null, base, net.minecraft.sound.SoundEvents.BLOCK_DEEPSLATE_BREAK,
-                        net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.5f);
-                world.spawnParticles(net.minecraft.particle.ParticleTypes.EXPLOSION,
-                        base.getX() + 1.5, base.getY() + 1.5, base.getZ() + 1.5,
-                        2, 1.0, 1.0, 1.0, 0.0);
-            }
-
-            // --- Зарастает один из открытых проходов (тоже вне поля зрения) ---
-            List<BlockPos> opened = MINE_OPENED_PASSAGES.get(sessionKey);
-            if (opened != null && !opened.isEmpty()) {
-                for (int i = 0; i < opened.size(); i++) {
-                    BlockPos base = opened.get(i);
-                    int gx = (base.getX() - origin.getX()) / cellSize;
-                    int gz = (base.getZ() - origin.getZ()) / cellSize;
-                    // Не заращиваем проход, в котором стоит игрок
-                    if (Math.abs(gx - pgx) <= 1 && Math.abs(gz - pgz) <= 1) continue;
-                    // Под лимитом — только за спиной; сверх лимита закрываем принудительно
-                    if (opened.size() <= MINE_MAX_OPEN_PASSAGES
-                            && isInPlayerView(player, lookX, lookZ, origin, gx, gz, cellSize)) continue;
-                    // Восстанавливаем стену как в buildMazeInWorld
-                    for (int x = 0; x < cellSize; x++) {
-                        for (int z = 0; z < cellSize; z++) {
-                            for (int y = 0; y < 4; y++) {
-                                net.minecraft.block.Block block = (y == 0 || RANDOM.nextFloat() < 0.8f)
-                                        ? net.minecraft.block.Blocks.DEEPSLATE
-                                        : net.minecraft.block.Blocks.COAL_ORE;
-                                world.setBlockState(base.add(x, y, z), block.getDefaultState());
-                            }
-                        }
-                    }
-                    opened.remove(i);
-                    world.playSound(null, base, net.minecraft.sound.SoundEvents.BLOCK_DEEPSLATE_PLACE,
-                            net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.5f);
-                    break; // за один сдвиг заращиваем максимум один проход
-                }
-            }
-        }
-    }
-
-    /**
-     * ДОБАВЛЕНО: true, если позиция сетки (gx,gz) в поле зрения игрока (в пределах ~100°
-     * от направления взгляда) или прямо под ним — такие места лабиринт не трогает.
-     */
-    private static boolean isInPlayerView(ServerPlayerEntity player, double lookX, double lookZ,
-                                          BlockPos origin, int gx, int gz, int cellSize) {
-        double dx = origin.getX() + gx * cellSize + cellSize / 2.0 - player.getX();
-        double dz = origin.getZ() + gz * cellSize + cellSize / 2.0 - player.getZ();
-        double len = Math.sqrt(dx * dx + dz * dz);
-        if (len < 2.0) return true;
-        double dot = (dx / len) * lookX + (dz / len) * lookZ;
-        return dot > -0.17; // cos(100°) ≈ -0.17
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Кровавый пир", редизайн "Последний ужин"): строит банкетный зал —
-     * тёмный чернитно-багровый чертог с базальтовыми колоннами, люстрой из фонарей душ,
-     * кострами душ по углам, багровыми знамёнами и длинным столом. За столом — пять
-     * Судей пира: одержимые в черепах иссер-скелетов и тёмных рясах, неподвижные,
-     * вечно смотрящие на игрока (см. tickCrimsonFeast). Игрок спавнится на багровой
-     * дорожке напротив них; блюда подаются на центральную "тарелку".
-     */
-    private static void setupCrimsonFeastTable(ServerWorld world, BlockPos center, UUID sessionKey) {
-        int floorY = center.getY() - 1;
-
-        // === ЗАЛ: пол, дорожка, стены с колоннами, потолок ===
-        for (int x = -8; x <= 8; x++) {
-            for (int z = -7; z <= 7; z++) {
-                // Пол: полированный чернит; багровая дорожка от входа к столу
-                boolean runner = Math.abs(x) <= 1 && z >= -7;
-                world.setBlockState(new BlockPos(center.getX() + x, floorY, center.getZ() + z),
-                        runner ? net.minecraft.block.Blocks.NETHER_WART_BLOCK.getDefaultState()
-                               : net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState());
-                // Потолок
-                world.setBlockState(new BlockPos(center.getX() + x, floorY + 7, center.getZ() + z),
-                        net.minecraft.block.Blocks.POLISHED_BLACKSTONE_BRICKS.getDefaultState());
-            }
-        }
-        for (int y = 0; y <= 5; y++) {
-            for (int x = -8; x <= 8; x++) {
-                for (int z = -7; z <= 7; z++) {
-                    boolean wall = Math.abs(x) == 8 || Math.abs(z) == 7;
-                    if (!wall) continue;
-                    // Дверной проём на юге — оттуда "пришёл" игрок
-                    if (z == 7 && Math.abs(x) <= 1 && y <= 2) continue;
-                    boolean pillar = (Math.abs(x) == 8 && (Math.abs(z) == 7 || z == -3 || z == 1))
-                                  || (Math.abs(z) == 7 && (Math.abs(x) == 8 || x == -4 || x == 0 || x == 4));
-                    BlockPos pos = new BlockPos(center.getX() + x, floorY + 1 + y, center.getZ() + z);
-                    if (pillar) {
-                        world.setBlockState(pos, net.minecraft.block.Blocks.POLISHED_BASALT.getDefaultState()
-                                .with(net.minecraft.block.PillarBlock.AXIS, net.minecraft.util.math.Direction.Axis.Y));
-                    } else if (y == 5) {
-                        world.setBlockState(pos, net.minecraft.block.Blocks.CHISELED_POLISHED_BLACKSTONE.getDefaultState());
-                    } else if (y == 3) {
-                        // Багровый пояс по стенам
-                        world.setBlockState(pos, net.minecraft.block.Blocks.RED_NETHER_BRICKS.getDefaultState());
-                    } else {
-                        world.setBlockState(pos, net.minecraft.block.Blocks.POLISHED_BLACKSTONE_BRICKS.getDefaultState());
-                    }
-                }
-            }
-        }
-
-        // === ДЕКОР: люстра над столом, костры душ по углам, знамёна, свечи ===
-        // Люстра: цепь с потолка + висячий фонарь душ над центром стола
-        world.setBlockState(center.add(0, 5, -3), net.minecraft.block.Blocks.CHAIN.getDefaultState());
-        world.setBlockState(center.add(0, 4, -3), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState()
-                .with(net.minecraft.block.LanternBlock.HANGING, true));
-        // Костры душ по углам зала — синие ведьмины огни и дым
-        for (int[] corner : new int[][] {{-6, -5}, {6, -5}, {-6, 5}, {6, 5}}) {
-            world.setBlockState(new BlockPos(center.getX() + corner[0], floorY + 1, center.getZ() + corner[1]),
-                    net.minecraft.block.Blocks.SOUL_CAMPFIRE.getDefaultState()
-                            .with(net.minecraft.block.CampfireBlock.LIT, true));
-        }
-        // Багровые знамёна на северной стене за судьями
-        for (int bx : new int[] {-3, 0, 3}) {
-            world.setBlockState(center.add(bx, 3, -7),
-                    net.minecraft.block.Blocks.RED_WALL_BANNER.getDefaultState()
-                            .with(net.minecraft.block.WallBannerBlock.FACING, net.minecraft.util.math.Direction.SOUTH));
-        }
-
-        // === СТОЛ: 9 блоков вдоль оси X, свечи, фонари душ по краям ===
-        List<BlockPos> plates = new ArrayList<>();
-        for (int x = -4; x <= 4; x++) {
-            BlockPos tablePos = center.add(x, 0, -3);
-            world.setBlockState(tablePos, net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState());
-            plates.add(tablePos);
-        }
-        // Свечи на столе (не занимая центральную тарелку игрока)
-        for (int cx : new int[] {-3, 3}) {
-            world.setBlockState(center.add(cx, 1, -3), net.minecraft.block.Blocks.RED_CANDLE.getDefaultState()
-                    .with(net.minecraft.block.CandleBlock.CANDLES, 2)
-                    .with(net.minecraft.block.CandleBlock.LIT, true));
-        }
-        // Фонари душ по краям стола
-        world.setBlockState(center.add(-5, 0, -3), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
-        world.setBlockState(center.add(5, 0, -3), net.minecraft.block.Blocks.SOUL_LANTERN.getDefaultState());
-        // Троны судей за столом: сиденья-ступени и высокие спинки
-        for (int tx = -4; tx <= 4; tx += 2) {
-            world.setBlockState(center.add(tx, 0, -5), net.minecraft.block.Blocks.BLACKSTONE_STAIRS.getDefaultState()
-                    .with(net.minecraft.block.StairsBlock.FACING, net.minecraft.util.math.Direction.SOUTH));
-            world.setBlockState(center.add(tx, 0, -6), net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState());
-            world.setBlockState(center.add(tx, 1, -6), net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState());
-            world.setBlockState(center.add(tx, 2, -6), net.minecraft.block.Blocks.POLISHED_BLACKSTONE.getDefaultState());
-        }
-
-        // === СУДЬИ ПИРА: одержимые в черепах иссер-скелетов и тёмных рясах.
-        // ИЗМЕНЕНО по фидбеку "манекены не страшные": череп-маска + ряса + хореография
-        // взглядов и реакций (см. tickCrimsonFeast, judgesReact) ===
-        List<UUID> guests = new ArrayList<>();
-        for (int x = -4; x <= 4; x += 2) {
-            var guestType = com.somnium.mod.registry.ModEntities.FERAL_VILLAGER;
-            var created = guestType.create(world);
-            if (created == null) continue;
-            created.refreshPositionAndAngles(
-                    center.getX() + x + 0.5, center.getY(), center.getZ() - 4 + 0.5, 0f, 0f);
-            created.setAiDisabled(true);      // неподвижен: восседает за столом
-            created.setInvulnerable(true);    // его нельзя убить — он часть сцены
-            created.setSilent(true);          // звуки только через сценарий
-            created.setPersistent();          // не деспавнится
-            created.setCustomName(net.minecraft.text.Text.literal("§4§lСудья пира"));
-            created.setCustomNameVisible(true);
-            // Череп иссер-скелета как маска и тёмная ряса из окрашенной кожи
-            created.equipStack(net.minecraft.entity.EquipmentSlot.HEAD,
-                    new ItemStack(net.minecraft.item.Items.WITHER_SKELETON_SKULL));
-            created.equipStack(net.minecraft.entity.EquipmentSlot.CHEST,
-                    dyedRobe(new ItemStack(net.minecraft.item.Items.LEATHER_CHESTPLATE)));
-            created.equipStack(net.minecraft.entity.EquipmentSlot.LEGS,
-                    dyedRobe(new ItemStack(net.minecraft.item.Items.LEATHER_LEGGINGS)));
-            for (net.minecraft.entity.EquipmentSlot slot : net.minecraft.entity.EquipmentSlot.values()) {
-                created.setEquipmentDropChance(slot, 0.0f);
-            }
-            world.spawnEntity(created);
-            guests.add(created.getUuid());
-        }
-
-        FEAST_TABLES.put(sessionKey, plates);
-        FEAST_GUESTS.put(sessionKey, guests);
-        FEAST_NEXT_GUEST_SOUND.put(sessionKey,
-                (long) world.getServer().getTicks() + 300 + RANDOM.nextInt(200));
-        FEAST_DISH_ITEM.remove(sessionKey);
-        FEAST_DISH_TAINTED.remove(sessionKey);
-        FEAST_COURSES_DONE.put(sessionKey, 0);
-        FEAST_TOAST_ITEM.remove(sessionKey);
-        FEAST_JUDGE_FOCUS_POS.remove(sessionKey);
-        FEAST_JUDGE_FOCUS_UNTIL.remove(sessionKey);
-        NEXT_DISH_TICK.put(sessionKey, (long) world.getServer().getTicks() + FEAST_FIRST_DISH_DELAY);
-
-        // ДОБАВЛЕНО ("Мясного голема на выходе нету"): голем-вышибала стоит у стола
-        // С САМОГО НАЧАЛА пира и охраняет место, где появится Кубок Тоста (выход из сна).
-        // Раньше он спавнился только после всех 5 блюд — игроки его просто не видели.
-        // Медленный, но бьёт по площади — к финалу за кубком придётся его обегать.
-        if (!plates.isEmpty()) {
-            BlockPos guardPlate = plates.get(plates.size() / 2);
-            var golem = com.somnium.mod.registry.ModEntities.FLESH_GOLEM.create(world);
-            if (golem != null) {
-                golem.refreshPositionAndAngles(
-                        guardPlate.getX() + 2.5, guardPlate.getY() + 1.0, guardPlate.getZ() + 2.5,
-                        0.0f, 0.0f);
-                golem.setPersistent();
-                world.spawnEntity(golem);
-                SomniumMod.LOGGER.info("[Crimson Feast] Мясной Голем-охранник заспавнен у стола в {}",
-                        guardPlate.toShortString());
-            }
-        }
-    }
-
-    /** Тёмно-багровая ряса судьи — кожаный доспех, окрашенный почти в чёрный. */
-    private static ItemStack dyedRobe(ItemStack stack) {
-        if (stack.getItem() instanceof net.minecraft.item.DyeableItem dyeable) {
-            dyeable.setColor(stack, 0x1B0507);
-        }
-        return stack;
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Кровавый пир", редизайн "Последний ужин"): судьи по очереди
-     * подают FEAST_COURSES блюд. Каждое блюдо либо свежее, либо тронутое (дымится зелёным):
-     *  - ОТВЕДАТЬ (подойти или ПКМ рукой): свежее +FEAST_EAT_FRESH_SANITY рассудка;
-     *    тронутое — FEAST_EAT_TAINTED_SANITY, яд и смех судей;
-     *  - СЖЕЧЬ (ПКМ Зажигалкой судей по блюду): тронутое сжечь правильно
-     *    (+FEAST_BURN_TAINTED_SANITY, судьи одобряют), свежее — оскорбление кухни
-     *    (FEAST_BURN_FRESH_SANITY, судьи шипят);
-     *  - ПРОИГНОРИРОВАТЬ: через FEAST_DISH_LIFETIME судьи обиженно убирают блюдо сами.
-     * После всех блюд подают Кубок Тоста — возьми его и ВЫПЕЙ до дна (зажми ПКМ) = победа.
-     * Поражение — смерть во сне (DIED_IN_DREAM); таймаут — "пережил без тоста".
-     */
-    public static void tickCrimsonFeast(MinecraftServer server) {
-        if (ACTIVE.isEmpty()) return;
-        long now = server.getTicks();
-
-        // Подожжённые блюда догорают независимо от того, какой игрок сейчас обрабатывается
-        tickBurningDishes(server, now);
-
-        for (UUID playerId : new ArrayList<>(ACTIVE.keySet())) {
-            ActiveDream active = ACTIVE.get(playerId);
-            if (active == null || !active.dreamId().equals(SomniumMod.id("crimson_feast"))) {
-                continue; // не наш сон
-            }
-
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
-            if (player == null || !(player.getEntityWorld() instanceof ServerWorld world)) continue;
-
-            UUID sessionKey = sessionKey(playerId);
-
-            // 0.1) ЗАЩИТА СЦЕНЫ: никаких агрессивных мобов в зале пира — убираем любого,
-            // кто заспавнился естественно (плоский мир + тёмный зал) или забрёл извне.
-            // Судьи исключены по UUID — они свои.
-            if (now % 10 == 0) {
-                List<BlockPos> platesForSweep = FEAST_TABLES.get(sessionKey);
-                List<UUID> judgeIds = FEAST_GUESTS.get(sessionKey);
-                if (platesForSweep != null && !platesForSweep.isEmpty()) {
-                    BlockPos mid = platesForSweep.get(platesForSweep.size() / 2);
-                    for (net.minecraft.entity.mob.MobEntity mob : world.getEntitiesByClass(
-                            net.minecraft.entity.mob.MobEntity.class,
-                            new net.minecraft.util.math.Box(mid).expand(28, 12, 28),
-                            e -> e instanceof net.minecraft.entity.mob.Monster
-                                    && (judgeIds == null || !judgeIds.contains(e.getUuid())))) {
-                        mob.discard();
-                    }
-                }
-            }
-
-            // 0.2) Зажигалка судей: выдаём участникам пира (и перевыдаём при потере)
-            if (now % 40 == 0 && !hasFeastLighter(player)) {
-                giveFeastLighter(player);
-            }
-
-            // 0.3) Судьи: смотрят на фокус события (горящее блюдо, кубок) или на игрока
-            List<UUID> guests = FEAST_GUESTS.get(sessionKey);
-            if (guests != null && !guests.isEmpty() && now % 5 == 0) {
-                BlockPos focus = null;
-                Long focusUntil = FEAST_JUDGE_FOCUS_UNTIL.get(sessionKey);
-                if (focusUntil != null && now < focusUntil) {
-                    focus = FEAST_JUDGE_FOCUS_POS.get(sessionKey);
-                }
-                for (UUID guestUuid : guests) {
-                    if (world.getEntity(guestUuid) instanceof net.minecraft.entity.mob.MobEntity guest) {
-                        double targetX = focus != null ? focus.getX() + 0.5 : player.getX();
-                        double targetZ = focus != null ? focus.getZ() + 0.5 : player.getZ();
-                        double dx = targetX - guest.getX();
-                        double dz = targetZ - guest.getZ();
-                        float lookYaw = (float) (Math.atan2(-dx, dz) * 180.0 / Math.PI);
-                        guest.setYaw(lookYaw);
-                        guest.setBodyYaw(lookYaw);
-                        guest.setHeadYaw(lookYaw);
-                    }
-                }
-            }
-            if (now >= FEAST_NEXT_GUEST_SOUND.getOrDefault(sessionKey, Long.MAX_VALUE)) {
-                // Все судьи разом издают низкий искажённый стон — синхронно и жутко
-                if (guests != null && !guests.isEmpty()) {
-                    for (UUID guestUuid : guests) {
-                        var guest = world.getEntity(guestUuid);
-                        if (guest != null) {
-                            world.playSound(null, guest.getX(), guest.getY(), guest.getZ(),
-                                    net.minecraft.sound.SoundEvents.ENTITY_ZOMBIE_VILLAGER_AMBIENT,
-                                    net.minecraft.sound.SoundCategory.HOSTILE, 0.7f, 0.45f);
-                        }
-                    }
-                }
-                FEAST_NEXT_GUEST_SOUND.put(sessionKey, now + 300 + RANDOM.nextInt(300));
-            }
-
-            // 0.4) Финал: игрок пьёт Кубок Тоста — победа, когда он допьёт до дна
-            if (player.isUsingItem()) {
-                ItemStack activeStack = player.getActiveItem();
-                if (isToastGoblet(activeStack)
-                        && player.getItemUseTime() >= activeStack.getMaxUseTime() - 2) {
-                    judgesReact(world, sessionKey, FeastReaction.CELEBRATE, null);
-                    world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                            net.minecraft.sound.SoundEvents.ENTITY_PLAYER_LEVELUP,
-                            net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
-                    wake(player, SanityManager.DreamOutcome.SURVIVED_OBJECTIVE);
-                    continue;
-                }
-            }
-
-            // 1) Активное блюдо ждёт решения: съесть (ПКМ рукой по блюду на столе или из
-            //    инвентаря) или сжечь зажигалкой (по блюду на столе или брошенному)
-            UUID dishUuid = FEAST_DISH_ITEM.get(sessionKey);
-            boolean dishTaken = FEAST_DISH_TAKEN.getOrDefault(sessionKey, false);
-            if (dishUuid != null || dishTaken) {
-                boolean tainted = FEAST_DISH_TAINTED.getOrDefault(sessionKey, false);
-
-                // Блюдо исчезло со стола — игрок взял его в инвентарь (это НЕ поедание!)
-                if (!dishTaken && (dishUuid == null || world.getEntity(dishUuid) == null)) {
-                    FEAST_DISH_ITEM.remove(sessionKey);
-                    FEAST_DISH_TAKEN.put(sessionKey, true);
-                    dishTaken = true;
-                    player.sendMessage(net.minecraft.text.Text.literal(
-                            "§7Блюдо у тебя. Свежее — съешь (зажми ПКМ). Порченое (зелёное) — в левую руку, зажигалку в правую, ПКМ — и оно сгорит."), true);
-                }
-
-                // Тронутое блюдо на столе дымится зелёным — внимательный игрок заметит
-                if (!dishTaken && dishUuid != null && tainted && now % 10 == 0) {
-                    var dish = world.getEntity(dishUuid);
-                    if (dish != null) {
-                        world.spawnParticles(net.minecraft.particle.ParticleTypes.WITCH,
-                                dish.getX(), dish.getY() + 0.4, dish.getZ(),
-                                3, 0.15, 0.1, 0.15, 0.01);
-                    }
-                }
-
-                // ДОБАВЛЕНО: тронутое блюдо дымится зелёным и В РУКАХ, и брошенное на полу —
-                // после подбора столешний дым пропадал, и игрок терял нить ("ем — не нравится,
-                // жгу — не нравится": на самом деле он не видел, какое блюдо тронуто)
-                if (now % 10 == 0) {
-                    if (isTaintedDish(player.getMainHandStack()) || isTaintedDish(player.getOffHandStack())) {
-                        world.spawnParticles(net.minecraft.particle.ParticleTypes.WITCH,
-                                player.getX(), player.getY() + 1.4, player.getZ(),
-                                2, 0.25, 0.1, 0.25, 0.01);
-                    }
-                    for (ItemEntity thrown : world.getEntitiesByClass(ItemEntity.class,
-                            new net.minecraft.util.math.Box(player.getBlockPos()).expand(10, 4, 10),
-                            e -> isTaintedDish(e.getStack()))) {
-                        world.spawnParticles(net.minecraft.particle.ParticleTypes.WITCH,
-                                thrown.getX(), thrown.getY() + 0.4, thrown.getZ(),
-                                2, 0.15, 0.1, 0.15, 0.01);
-                    }
-                }
-
-                // Игрок ест блюдо из инвентаря — засчитываем, когда доел до конца
-                if (player.isUsingItem()) {
-                    ItemStack eating = player.getActiveItem();
-                    if (isFeastDish(eating) && player.getItemUseTime() >= eating.getMaxUseTime() - 2) {
-                        boolean eatenTainted = isTaintedDish(eating);
-                        finishCourse(sessionKey, now);
-                        eatDish(player, world, sessionKey, eatenTainted);
-                        continue;
-                    }
-                }
-
-                // Дедлайн: судьи убирают нерешённое блюдо — со стола, из рук или с пола
-                if (now >= FEAST_DISH_DEADLINE.getOrDefault(sessionKey, now)) {
-                    if (!dishTaken && dishUuid != null) {
-                        var dish = world.getEntity(dishUuid);
-                        if (dish != null) dish.discard();
-                    } else {
-                        removeFeastDish(player, world, sessionKey);
-                    }
-                    finishCourse(sessionKey, now);
-                    SanityManager.get(player).addSanity(FEAST_IGNORED_SANITY);
-                    player.sendMessage(net.minecraft.text.Text.literal(
-                            "§7Судьи молча убирают нетронутое блюдо... Они обижены."), true);
-                    judgesReact(world, sessionKey, FeastReaction.ANGRY, null);
-                }
-                continue;
-            }
-
-            // 2) Все блюда разрешены — подаём Кубок Тоста (финал сна)
-            int done = FEAST_COURSES_DONE.getOrDefault(sessionKey, 0);
-            if (done >= FEAST_COURSES) {
-                if (!FEAST_TOAST_ITEM.containsKey(sessionKey)) {
-                    spawnToastGoblet(world, sessionKey);
-                } else {
-                    UUID toastUuid = FEAST_TOAST_ITEM.get(sessionKey);
-                    var toast = world.getEntity(toastUuid);
-                    if (toast != null && now % 20 == 0) {
-                        // Кубок манит золотыми частицами
-                        world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                                toast.getX(), toast.getY() + 0.4, toast.getZ(),
-                                2, 0.15, 0.1, 0.15, 0.01);
-                    }
-                    if (now % 200 == 0 && !hasToastGoblet(player)) {
-                        player.sendMessage(net.minecraft.text.Text.literal(
-                                "§7Кубок Тоста ждёт на столе — возьми его и выпей до дна."), true);
-                    }
-                }
-                continue;
-            }
-
-            // 3) Подача следующего блюда
-            if (now >= NEXT_DISH_TICK.getOrDefault(sessionKey, 0L)) {
-                serveNextDish(world, sessionKey, now, done == 0);
-                // ИСПРАВЛЕНО ("ем нормальную еду им не нравится"): при полной сытости ваниль
-                // не даёт есть ВООБЩЕ — блюдо висело нерешённым до дедлайна, и судьи обижались
-                // на, казалось бы, съеденное блюдо. Перед каждой подачей игрок слегка
-                // проголодается, чтобы блюдо всегда можно было отведать.
-                player.getHungerManager().setFoodLevel(12);
-                player.getHungerManager().setSaturationLevel(1.0f);
-            }
-        }
-    }
-
-    /** Блюдо разрешено любым способом — счётчик курсов +1, следующая подача по расписанию. */
-    private static void finishCourse(UUID sessionKey, long now) {
-        FEAST_DISH_ITEM.remove(sessionKey);
-        FEAST_DISH_TAINTED.remove(sessionKey);
-        FEAST_DISH_TAKEN.remove(sessionKey);
-        FEAST_COURSES_DONE.put(sessionKey, FEAST_COURSES_DONE.getOrDefault(sessionKey, 0) + 1);
-        NEXT_DISH_TICK.put(sessionKey, now + FEAST_DISH_INTERVAL);
-    }
-
-    /** Ставит на центральную тарелку перед игроком очередное блюдо — свежее или тронутое. */
-    private static void serveNextDish(ServerWorld world, UUID sessionKey, long now, boolean firstDish) {
-        List<BlockPos> plates = FEAST_TABLES.get(sessionKey);
-        if (plates == null || plates.isEmpty()) return;
-        BlockPos plate = plates.get(plates.size() / 2); // место игрока — центр стола
-
-        boolean tainted = RANDOM.nextDouble() < FEAST_TAINTED_CHANCE;
-        net.minecraft.item.Item[] freshMenu = {
-                net.minecraft.item.Items.GOLDEN_CARROT, net.minecraft.item.Items.COOKED_BEEF,
-                net.minecraft.item.Items.BAKED_POTATO, net.minecraft.item.Items.BREAD,
-                net.minecraft.item.Items.APPLE };
-        net.minecraft.item.Item[] taintedMenu = {
-                net.minecraft.item.Items.ROTTEN_FLESH, net.minecraft.item.Items.SPIDER_EYE,
-                net.minecraft.item.Items.POISONOUS_POTATO };
-        net.minecraft.item.Item dishItem = tainted
-                ? taintedMenu[RANDOM.nextInt(taintedMenu.length)]
-                : freshMenu[RANDOM.nextInt(freshMenu.length)];
-
-        ItemStack stack = new ItemStack(dishItem);
-        // ИСПРАВЛЕНО ("не понимаю как работает"): тронутое блюдо теперь ВСЕГДА отличается
-        // именем — раньше и свежее, и тронутое назывались одинаково ("Блюдо пира"), поэтому
-        // в инвентаре их нельзя было различить, и игрок не понимал, за что судьи шипят.
-        stack.setCustomName(net.minecraft.text.Text.literal(
-                tainted ? "§2Порченое блюдо — сжечь!" : "§6Свежее блюдо пира"));
-        // ИЗМЕНЕНО (фидбек "предметы не поднимаются"): блюдо МОЖНО взять в инвентарь —
-        // NBT-метки сохраняются при подборе. Еда засчитывается при реальном поедании
-        // из руки (как кубок), сжигание — ПКМ зажигалкой по блюду на столе или брошенному.
-        stack.getOrCreateNbt().putBoolean(FEAST_DISH_TAG, true);
-        stack.getOrCreateNbt().putBoolean(FEAST_DISH_TAINTED_TAG, tainted);
-        ItemEntity dish = new ItemEntity(world,
-                plate.getX() + 0.5, plate.getY() + 1.0, plate.getZ() + 0.5, stack);
-        dish.setNeverDespawn();
-        dish.setGlowing(true);
-        world.spawnEntity(dish);
-
-        FEAST_DISH_ITEM.put(sessionKey, dish.getUuid());
-        FEAST_DISH_TAINTED.put(sessionKey, tainted);
-        FEAST_DISH_DEADLINE.put(sessionKey, now + FEAST_DISH_LIFETIME);
-
-        world.playSound(null, plate, net.minecraft.sound.SoundEvents.ENTITY_ITEM_FRAME_PLACE,
-                net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.5f);
-
-        if (firstDish) {
-            ServerPlayerEntity player = world.getServer().getPlayerManager()
-                    .getPlayer(sessionKey);
-            if (player != null) {
-                // ИЗМЕНЕНО ("текст быстро пропадает"): инструкция висит 10 секунд
-                showHint(player, "§6Свежее блюдо — съешь. Порченое (зелёное имя и дым) — возьми в левую руку, зажигалку в правую, ПКМ — сожги.", 10);
-            }
-        }
-    }
-
-    /** Кубок Тоста как предмет с NBT-меткой — по ней ловим реальное питьё и чистим инвентарь. */
-    private static ItemStack createToastGobletStack() {
-        ItemStack goblet = new ItemStack(net.minecraft.item.Items.HONEY_BOTTLE);
-        goblet.getOrCreateNbt().putBoolean(FEAST_TOAST_TAG, true);
-        goblet.setCustomName(net.minecraft.text.Text.literal("§6§lКубок Тоста"));
-        return goblet;
-    }
-
-    /** Ставит на стол Кубок Тоста — финальный выход из сна (взять и выпить до дна). */
-    private static void spawnToastGoblet(ServerWorld world, UUID sessionKey) {
-        List<BlockPos> plates = FEAST_TABLES.get(sessionKey);
-        if (plates == null || plates.isEmpty()) return;
-        BlockPos plate = plates.get(plates.size() / 2);
-
-        ItemEntity toast = new ItemEntity(world,
-                plate.getX() + 0.5, plate.getY() + 1.0, plate.getZ() + 0.5, createToastGobletStack());
-        toast.setNeverDespawn();
-        toast.setGlowing(true);
-        world.spawnEntity(toast);
-        FEAST_TOAST_ITEM.put(sessionKey, toast.getUuid());
-
-        world.playSound(null, plate, net.minecraft.sound.SoundEvents.BLOCK_BELL_USE,
-                net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.6f);
-        // Судьи торжественно поворачиваются к кубку
-        judgesReact(world, sessionKey, FeastReaction.APPROVE, plate);
-
-        ServerPlayerEntity player = world.getServer().getPlayerManager().getPlayer(sessionKey);
-        if (player != null) {
-            showHint(player, "§6Пир окончен. Возьми Кубок Тоста со стола — и выпей его до дна (зажми ПКМ), чтобы проснуться.", 10);
-            // Голем-охранник уже стоит у стола с начала пира — напоминаем об опасности
-            showHint(player, "§4Мясной Голем охраняет Кубок Тоста! Осторожно: он бьёт по площади.", 8);
-        }
-    }
-
-    /** Виды реакций судей пира на поступки игрока. */
-    private enum FeastReaction { APPROVE, ANGRY, LAUGH, CELEBRATE }
-
-    /**
-     * ДОБАВЛЕНО (сон "Кровавый пир", редизайн): ПКМ по сущностям пира.
-     * ПКМ по блюду с Зажигалкой судей в руке = сжечь блюдо (правильный ответ на тронутое);
-     * ПКМ по блюду без зажигалки = съесть его (то же, что подобрать с пола);
-     * ПКМ по Кубку Тоста = взять его в руки (дальше — просто выпить, зажав ПКМ).
-     * Регистрация события — UseEntityCallback в SomniumMod#onInitialize.
-     */
-    public static net.minecraft.util.ActionResult onFeastEntityUse(ServerPlayerEntity player,
-                                                                   net.minecraft.util.Hand hand,
-                                                                   net.minecraft.entity.Entity entity) {
-        ActiveDream active = ACTIVE.get(player.getUuid());
-        if (active == null || !active.dreamId().equals(SomniumMod.id("crimson_feast"))) {
-            return net.minecraft.util.ActionResult.PASS;
-        }
-        if (!(player.getEntityWorld() instanceof ServerWorld world)) {
-            return net.minecraft.util.ActionResult.PASS;
-        }
-        UUID sessionKey = sessionKey(player.getUuid());
-        long now = world.getServer().getTicks();
-
-        // ПКМ по блюду: зажигалка в любой руке — сжечь; иначе — съесть
-        UUID dishUuid = FEAST_DISH_ITEM.get(sessionKey);
-        if (dishUuid != null && dishUuid.equals(entity.getUuid())) {
-            boolean tainted = FEAST_DISH_TAINTED.getOrDefault(sessionKey, false);
-            if (isFeastLighter(player.getMainHandStack()) || isFeastLighter(player.getOffHandStack())) {
-                burnDish(player, world, sessionKey, entity, tainted, now);
-            } else {
-                entity.discard();
-                finishCourse(sessionKey, now);
-                eatDish(player, world, sessionKey, tainted);
-            }
-            return net.minecraft.util.ActionResult.SUCCESS;
-        }
-
-        // ПКМ зажигалкой по БРОШЕННОМУ блюду (лежит на полу) — сжечь на месте
-        if (entity instanceof ItemEntity itemEntity && isFeastDish(itemEntity.getStack())) {
-            if (isFeastLighter(player.getMainHandStack()) || isFeastLighter(player.getOffHandStack())) {
-                burnDish(player, world, sessionKey, entity, isTaintedDish(itemEntity.getStack()), now);
-                return net.minecraft.util.ActionResult.SUCCESS;
-            }
-        }
-
-        // ПКМ по Кубку Тоста — взять в руки (питьё ловится в tickCrimsonFeast)
-        UUID toastUuid = FEAST_TOAST_ITEM.get(sessionKey);
-        if (toastUuid != null && toastUuid.equals(entity.getUuid())) {
-            entity.discard();
-            FEAST_TOAST_ITEM.remove(sessionKey);
-            player.giveItemStack(createToastGobletStack());
-            player.sendMessage(net.minecraft.text.Text.literal(
-                    "§6Ты поднимаешь Кубок Тоста. Судьи замирают — выпей его (зажми ПКМ)."), true);
-            world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                    net.minecraft.sound.SoundEvents.ITEM_BOTTLE_FILL,
-                    net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.7f);
-            return net.minecraft.util.ActionResult.SUCCESS;
-        }
-
-        return net.minecraft.util.ActionResult.PASS;
-    }
-
-    /**
-     * ДОБАВЛЕНО ("не регистрирует, что я сжигаю плохую еду"): поджог БЕЗ попадания ПКМ
-     * по крошечному летающему предмету. Вызывается из UseItemCallback/UseBlockCallback.
-     *  - зажигалка в одной руке + блюдо в другой → блюдо вспыхивает прямо в руке;
-     *  - зажигалка в руке + брошенное блюдо в радиусе 4 блоков → поджигается ближайшее.
-     */
-    public static net.minecraft.util.ActionResult onFeastLighterUse(ServerPlayerEntity player) {
-        ActiveDream active = ACTIVE.get(player.getUuid());
-        if (active == null || !active.dreamId().equals(SomniumMod.id("crimson_feast"))) {
-            return net.minecraft.util.ActionResult.PASS;
-        }
-        if (!(player.getEntityWorld() instanceof ServerWorld world)) {
-            return net.minecraft.util.ActionResult.PASS;
-        }
-        UUID sessionKey = sessionKey(player.getUuid());
-        long now = world.getServer().getTicks();
-
-        ItemStack main = player.getMainHandStack();
-        ItemStack off = player.getOffHandStack();
-        boolean lighterMain = isFeastLighter(main);
-        boolean lighterOff = isFeastLighter(off);
-
-        // 1) Блюдо + зажигалка в разных руках — сжечь блюдо в руке
-        if (lighterMain && isFeastDish(off)) {
-            burnHeldDish(player, world, sessionKey, net.minecraft.util.Hand.OFF_HAND,
-                    isTaintedDish(off), now);
-            return net.minecraft.util.ActionResult.SUCCESS;
-        }
-        if (lighterOff && isFeastDish(main)) {
-            burnHeldDish(player, world, sessionKey, net.minecraft.util.Hand.MAIN_HAND,
-                    isTaintedDish(main), now);
-            return net.minecraft.util.ActionResult.SUCCESS;
-        }
-
-        // 2) Зажигалка в руке + брошенное блюдо рядом — поджечь ближайшее
-        if (lighterMain || lighterOff) {
-            ItemEntity nearest = null;
-            double best = Double.MAX_VALUE;
-            for (ItemEntity e : world.getEntitiesByClass(ItemEntity.class,
-                    player.getBoundingBox().expand(4.0),
-                    e -> isFeastDish(e.getStack()))) {
-                double d = e.squaredDistanceTo(player);
-                if (d < best) {
-                    best = d;
-                    nearest = e;
-                }
-            }
-            if (nearest != null) {
-                burnDish(player, world, sessionKey, nearest,
-                        isTaintedDish(nearest.getStack()), now);
-                return net.minecraft.util.ActionResult.SUCCESS;
-            }
-        }
-        return net.minecraft.util.ActionResult.PASS;
-    }
-
-    /** Блюдо сгорает прямо в руке игрока: вспышка, пепел и реакция судей. */
-    private static void burnHeldDish(ServerPlayerEntity player, ServerWorld world, UUID sessionKey,
-                                     net.minecraft.util.Hand dishHand, boolean tainted, long now) {
-        player.getStackInHand(dishHand).decrement(1);
-        world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                net.minecraft.sound.SoundEvents.ITEM_FLINTANDSTEEL_USE,
-                net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 1.0f);
-        world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                net.minecraft.sound.SoundEvents.BLOCK_FIRE_AMBIENT,
-                net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
-        world.spawnParticles(net.minecraft.particle.ParticleTypes.FLAME,
-                player.getX(), player.getY() + 1.2, player.getZ(),
-                25, 0.3, 0.4, 0.3, 0.02);
-        world.spawnParticles(net.minecraft.particle.ParticleTypes.LARGE_SMOKE,
-                player.getX(), player.getY() + 1.4, player.getZ(),
-                10, 0.2, 0.3, 0.2, 0.01);
-        // Засчитываем курс, только если блюдо действительно ждало решения
-        if (FEAST_DISH_ITEM.containsKey(sessionKey)
-                || FEAST_DISH_TAKEN.getOrDefault(sessionKey, false)) {
-            finishCourse(sessionKey, now);
-        }
-        if (tainted) {
-            SanityManager.get(player).addSanity(FEAST_BURN_TAINTED_SANITY);
-            player.sendMessage(net.minecraft.text.Text.literal(
-                    "§6Порченое блюдо вспыхивает прямо в руке. Судьи одобрительно склоняют головы."), true);
-            judgesReact(world, sessionKey, FeastReaction.APPROVE, player.getBlockPos());
-        } else {
-            SanityManager.get(player).addSanity(FEAST_BURN_FRESH_SANITY);
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.HUNGER, 300, 0));
-            player.sendMessage(net.minecraft.text.Text.literal(
-                    "§7Ты сжёг свежее блюдо. Судьи недовольно шипят."), true);
-            judgesReact(world, sessionKey, FeastReaction.ANGRY, player.getBlockPos());
-        }
-    }
-
-    /** Игрок съел блюдо (подобрал или ПКМ рукой): свежее — награда, тронутое — яд и смех. */
-    private static void eatDish(ServerPlayerEntity player, ServerWorld world, UUID sessionKey,
-                                boolean tainted) {
-        if (tainted) {
-            SanityManager.get(player).addSanity(FEAST_EAT_TAINTED_SANITY);
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.POISON, 200, 0));
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.NAUSEA, 160, 0));
-            player.sendMessage(net.minecraft.text.Text.literal(
-                    "§2Блюдо было тронуто... Судьи хохочут."), true);
-            judgesReact(world, sessionKey, FeastReaction.LAUGH, null);
-        } else {
-            SanityManager.get(player).addSanity(FEAST_EAT_FRESH_SANITY);
-            player.sendMessage(net.minecraft.text.Text.literal(
-                    "§6Свежее блюдо. Судьи одобрительно кивают."), true);
-            world.playSound(null, player.getX(), player.getY(), player.getZ(),
-                    net.minecraft.sound.SoundEvents.ENTITY_GENERIC_EAT,
-                    net.minecraft.sound.SoundCategory.PLAYERS, 1.0f, 0.8f);
-            judgesReact(world, sessionKey, FeastReaction.APPROVE, null);
-        }
-    }
-
-    /** Игрок поджёг блюдо Зажигалкой судей: зрелищное горение и реакция судей. */
-    private static void burnDish(ServerPlayerEntity player, ServerWorld world, UUID sessionKey,
-                                 net.minecraft.entity.Entity dish, boolean tainted, long now) {
-        dish.setFireTicks(FEAST_BURN_TICKS + 20);
-        // Горящее блюдо нельзя подобрать обратно — оно уже "решено"
-        if (dish instanceof ItemEntity dishItem) {
-            dishItem.setPickupDelay(32767);
-        }
-        FEAST_BURNING_DISHES.put(dish.getUuid(), now + FEAST_BURN_TICKS);
-        // Засчитываем курс, только если блюдо действительно ждало решения
-        if (FEAST_DISH_ITEM.containsKey(sessionKey)
-                || FEAST_DISH_TAKEN.getOrDefault(sessionKey, false)) {
-            finishCourse(sessionKey, now);
-        }
-        BlockPos dishPos = dish.getBlockPos();
-        world.playSound(null, dishPos, net.minecraft.sound.SoundEvents.ITEM_FLINTANDSTEEL_USE,
-                net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 1.0f);
-        world.playSound(null, dishPos, net.minecraft.sound.SoundEvents.BLOCK_FIRE_AMBIENT,
-                net.minecraft.sound.SoundCategory.BLOCKS, 1.0f, 0.8f);
-        if (tainted) {
-            // Правильное решение: тронутое блюдо уничтожено огнём
-            SanityManager.get(player).addSanity(FEAST_BURN_TAINTED_SANITY);
-            player.sendMessage(net.minecraft.text.Text.literal(
-                    "§6Тронутое блюдо сгорает в пламени. Судьи одобрительно склоняют головы."), true);
-            judgesReact(world, sessionKey, FeastReaction.APPROVE, dishPos);
-        } else {
-            // Свежее блюдо сожжено — оскорбление кухни хозяина
-            SanityManager.get(player).addSanity(FEAST_BURN_FRESH_SANITY);
-            player.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.HUNGER, 300, 0));
-            player.sendMessage(net.minecraft.text.Text.literal(
-                    "§7Ты сжёг свежее блюдо. Судьи недовольно шипят."), true);
-            judgesReact(world, sessionKey, FeastReaction.ANGRY, dishPos);
-        }
-    }
-
-    /** Реакция судей: звуки, частицы над каждым, взгляды на точку события (если задана). */
-    private static void judgesReact(ServerWorld world, UUID sessionKey, FeastReaction reaction,
-                                    BlockPos focusPos) {
-        List<UUID> guests = FEAST_GUESTS.get(sessionKey);
-        if (guests == null || guests.isEmpty()) return;
-        long now = world.getServer().getTicks();
-        for (UUID guestUuid : guests) {
-            var guest = world.getEntity(guestUuid);
-            if (guest == null) continue;
-            switch (reaction) {
-                case APPROVE -> {
-                    world.playSound(null, guest.getX(), guest.getY(), guest.getZ(),
-                            net.minecraft.sound.SoundEvents.ENTITY_VILLAGER_YES,
-                            net.minecraft.sound.SoundCategory.HOSTILE, 0.9f, 0.55f);
-                    world.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL_FIRE_FLAME,
-                            guest.getX(), guest.getY() + 2.2, guest.getZ(), 6, 0.2, 0.2, 0.2, 0.02);
-                }
-                case ANGRY -> {
-                    world.playSound(null, guest.getX(), guest.getY(), guest.getZ(),
-                            net.minecraft.sound.SoundEvents.ENTITY_VILLAGER_NO,
-                            net.minecraft.sound.SoundCategory.HOSTILE, 0.9f, 0.5f);
-                    world.spawnParticles(net.minecraft.particle.ParticleTypes.ANGRY_VILLAGER,
-                            guest.getX(), guest.getY() + 2.2, guest.getZ(), 4, 0.25, 0.2, 0.25, 0.02);
-                }
-                case LAUGH -> {
-                    world.playSound(null, guest.getX(), guest.getY(), guest.getZ(),
-                            net.minecraft.sound.SoundEvents.ENTITY_WITCH_CELEBRATE,
-                            net.minecraft.sound.SoundCategory.HOSTILE, 0.9f, 0.5f);
-                    world.spawnParticles(net.minecraft.particle.ParticleTypes.WITCH,
-                            guest.getX(), guest.getY() + 2.0, guest.getZ(), 8, 0.3, 0.3, 0.3, 0.02);
-                }
-                case CELEBRATE -> {
-                    world.playSound(null, guest.getX(), guest.getY(), guest.getZ(),
-                            net.minecraft.sound.SoundEvents.ENTITY_VILLAGER_CELEBRATE,
-                            net.minecraft.sound.SoundCategory.HOSTILE, 1.0f, 0.6f);
-                    world.spawnParticles(net.minecraft.particle.ParticleTypes.END_ROD,
-                            guest.getX(), guest.getY() + 2.2, guest.getZ(), 10, 0.3, 0.3, 0.3, 0.05);
-                }
-            }
-        }
-        if (focusPos != null) {
-            FEAST_JUDGE_FOCUS_POS.put(sessionKey, focusPos);
-            FEAST_JUDGE_FOCUS_UNTIL.put(sessionKey, now + FEAST_JUDGE_FOCUS_TICKS);
-        }
-    }
-
-    /** Горящие блюда: пламя и дым, потом блюдо исчезает с шипением и душой-искрой. */
-    private static void tickBurningDishes(MinecraftServer server, long now) {
-        if (FEAST_BURNING_DISHES.isEmpty()) return;
-        for (var entry : new ArrayList<>(FEAST_BURNING_DISHES.entrySet())) {
-            net.minecraft.entity.Entity dish = null;
-            ServerWorld dishWorld = null;
-            for (ServerWorld world : server.getWorlds()) {
-                dish = world.getEntity(entry.getKey());
-                if (dish != null) { dishWorld = world; break; }
-            }
-            if (dish == null) {
-                FEAST_BURNING_DISHES.remove(entry.getKey());
-                continue;
-            }
-            if (now % 3 == 0) {
-                dishWorld.spawnParticles(net.minecraft.particle.ParticleTypes.FLAME,
-                        dish.getX(), dish.getY() + 0.3, dish.getZ(), 4, 0.15, 0.15, 0.15, 0.02);
-                dishWorld.spawnParticles(net.minecraft.particle.ParticleTypes.SMOKE,
-                        dish.getX(), dish.getY() + 0.6, dish.getZ(), 2, 0.1, 0.15, 0.1, 0.01);
-            }
-            if (now >= entry.getValue()) {
-                dishWorld.playSound(null, dish.getX(), dish.getY(), dish.getZ(),
-                        net.minecraft.sound.SoundEvents.BLOCK_FIRE_EXTINGUISH,
-                        net.minecraft.sound.SoundCategory.BLOCKS, 0.8f, 1.2f);
-                dishWorld.spawnParticles(net.minecraft.particle.ParticleTypes.SOUL,
-                        dish.getX(), dish.getY() + 0.3, dish.getZ(), 8, 0.2, 0.2, 0.2, 0.02);
-                dish.discard();
-                FEAST_BURNING_DISHES.remove(entry.getKey());
-            }
-        }
-    }
-
-    /** Создаёт Зажигалку судей — сонный инструмент пира (неразрушима, NBT-метка). */
-    private static ItemStack createFeastLighter() {
-        ItemStack lighter = new ItemStack(net.minecraft.item.Items.FLINT_AND_STEEL);
-        lighter.getOrCreateNbt().putBoolean(FEAST_LIGHTER_TAG, true);
-        lighter.getOrCreateNbt().putBoolean("Unbreakable", true);
-        lighter.setCustomName(net.minecraft.text.Text.literal("§6§lЗажигалка судей"));
-        return lighter;
-    }
-
-    private static boolean isFeastLighter(ItemStack stack) {
-        return stack.getItem() == net.minecraft.item.Items.FLINT_AND_STEEL
-                && stack.getNbt() != null && stack.getNbt().getBoolean(FEAST_LIGHTER_TAG);
-    }
-
-    private static boolean hasFeastLighter(ServerPlayerEntity player) {
-        for (int i = 0; i < player.getInventory().size(); i++) {
-            if (isFeastLighter(player.getInventory().getStack(i))) return true;
-        }
-        return false;
-    }
-
-    /** Выдаёт зажигалку и один раз объясняет, зачем она (onboarding механики). */
-    private static void giveFeastLighter(ServerPlayerEntity player) {
-        player.giveItemStack(createFeastLighter());
-        if (FEAST_LIGHTER_GIVEN.add(player.getUuid())) {
-            player.sendMessage(net.minecraft.text.Text.literal(
-                    "§6Судьи вручают тебе Зажигалку. Порченое блюдо (зелёное имя и дым) — возьми его в ЛЕВУЮ руку, зажигалку в правую и нажми ПКМ — блюдо сгорит."),
-                    false);
-        }
-    }
-
-    private static boolean isToastGoblet(ItemStack stack) {
-        return stack.getItem() == net.minecraft.item.Items.HONEY_BOTTLE
-                && stack.getNbt() != null && stack.getNbt().getBoolean(FEAST_TOAST_TAG);
-    }
-
-    private static boolean hasToastGoblet(ServerPlayerEntity player) {
-        for (int i = 0; i < player.getInventory().size(); i++) {
-            if (isToastGoblet(player.getInventory().getStack(i))) return true;
-        }
-        return false;
-    }
-
-    private static boolean isFeastDish(ItemStack stack) {
-        return stack.getNbt() != null && stack.getNbt().getBoolean(FEAST_DISH_TAG);
-    }
-
-    private static boolean isTaintedDish(ItemStack stack) {
-        return isFeastDish(stack) && stack.getNbt().getBoolean(FEAST_DISH_TAINTED_TAG);
-    }
-
-    /** Судьи забирают нерешённое блюдо: из инвентаря игрока или лежащее рядом со столом. */
-    private static void removeFeastDish(ServerPlayerEntity player, ServerWorld world, UUID sessionKey) {
-        var inventory = player.getInventory();
-        for (int i = 0; i < inventory.size(); i++) {
-            if (isFeastDish(inventory.getStack(i))) {
-                inventory.setStack(i, ItemStack.EMPTY);
-                return;
-            }
-        }
-        List<BlockPos> plates = FEAST_TABLES.get(sessionKey);
-        if (plates == null || plates.isEmpty()) return;
-        BlockPos mid = plates.get(plates.size() / 2);
-        for (ItemEntity item : world.getEntitiesByClass(ItemEntity.class,
-                new net.minecraft.util.math.Box(mid).expand(12, 6, 12),
-                e -> isFeastDish(e.getStack()))) {
-            item.discard();
-            return;
-        }
-    }
-
-    /** Сонные предметы пира нельзя выносить в реальный мир — снимаем при пробуждении. */
-    private static void removeFeastItems(ServerPlayerEntity player) {
-        var inventory = player.getInventory();
-        for (int i = 0; i < inventory.size(); i++) {
-            ItemStack stack = inventory.getStack(i);
-            if (isFeastLighter(stack) || isToastGoblet(stack) || isFeastDish(stack)) {
-                inventory.setStack(i, ItemStack.EMPTY);
-            }
-        }
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Сон-в-сне"): копирует блоки 32 чанков (128x128) вокруг игрока
-     */
-    private static ChunkSnapshot captureChunk(ServerWorld world, BlockPos center) {
-        Map<BlockPos, net.minecraft.block.BlockState> blocks = new HashMap<>();
-
-        // Копируем область 128x128 блоков (32 чанка = 8x8 чанков) по горизонтали
-        // От Y=center.Y-30 до Y=center.Y+30 по вертикали для большей реалистичности
-        int halfSize = 64; // 128 / 2 = 64 блока в каждую сторону от центра
-        int startX = center.getX() - halfSize;
-        int startZ = center.getZ() - halfSize;
-        int minY = Math.max(world.getBottomY(), center.getY() - 30);
-        int maxY = center.getY() + 30; // Фиксированный диапазон относительно игрока
-
-        SomniumMod.LOGGER.info("[Dream Within Dream] Копирование области 128x128, Y от {} до {}", minY, maxY);
-
-        for (int x = startX; x < startX + 128; x++) {
-            for (int z = startZ; z < startZ + 128; z++) {
-                for (int y = minY; y <= maxY; y++) {
-                    BlockPos pos = new BlockPos(x, y, z);
-                    net.minecraft.block.BlockState state = world.getBlockState(pos);
-                    if (!state.isAir()) {
-                        blocks.put(new BlockPos(x - startX, y - minY, z - startZ), state);
-                    }
-                }
-            }
-        }
-
-        SomniumMod.LOGGER.info("[Dream Within Dream] Скопировано {} блоков", blocks.size());
-
-        return new ChunkSnapshot(blocks, new BlockPos(startX, minY, startZ));
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Сон-в-сне"): воссоздаёт скопированный чанк в измерении сна
-     * ИЗМЕНЕНО: убраны барьеры - обрыв в пустоту естественный (просто нет блоков дальше)
-     */
-    private static BlockPos recreateChunkInDream(ServerWorld dreamWorld, ChunkSnapshot snapshot, BlockPos originalPos) {
-        // Центрируем воссозданный чанк вокруг (0, 5, 0) в измерении сна
-        BlockPos dreamOrigin = new BlockPos(0, 5, 0);
-
-        SomniumMod.LOGGER.info("[Dream Within Dream] Воссоздание блоков в мире сна. Origin: {}, блоков: {}",
-            dreamOrigin, snapshot.blocks.size());
-
-        for (Map.Entry<BlockPos, net.minecraft.block.BlockState> entry : snapshot.blocks.entrySet()) {
-            BlockPos relativePos = entry.getKey();
-            BlockPos dreamPos = dreamOrigin.add(relativePos);
-            dreamWorld.setBlockState(dreamPos, entry.getValue(), 3);
-        }
-
-        // Возвращаем позицию спавна игрока - точно на том же месте, где он был в реальном мире
-        int relX = originalPos.getX() - snapshot.origin.getX();
-        int relY = originalPos.getY() - snapshot.origin.getY();
-        int relZ = originalPos.getZ() - snapshot.origin.getZ();
-
-        BlockPos spawnPos = dreamOrigin.add(relX, relY, relZ);
-
-        SomniumMod.LOGGER.info("[Dream Within Dream] Позиция спавна игрока: {} (оригинал: {}, относительно: {},{},{})",
-            spawnPos, originalPos, relX, relY, relZ);
-
-        // ИСПРАВЛЕНИЕ: проверяем есть ли блок под игроком, если нет - создаём страховочную платформу 3x3
-        BlockPos blockBelow = spawnPos.down();
-        if (dreamWorld.getBlockState(blockBelow).isAir()) {
-            SomniumMod.LOGGER.warn("[Dream Within Dream] Под игроком пустота! Создаём страховочную платформу");
-
-            // Создаём платформу 3x3 из того же материала, что и ближайший блок вокруг
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    BlockPos platformPos = blockBelow.add(dx, 0, dz);
-                    dreamWorld.setBlockState(platformPos, net.minecraft.block.Blocks.STONE.getDefaultState(), 3);
-                }
-            }
-        }
-
-        return spawnPos;
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Сон-в-сне"): тикает механику тревожных эффектов через 20 секунд
-     * Через 20 секунд мир меняется: наступает ночь, начинается снег, красное небо, тревожная музыка
-     */
-    public static void tickDreamWithinDream(MinecraftServer server) {
-        if (DREAM_WITHIN_DREAM_ORIGINAL_POS.isEmpty()) return;
-
-        long now = server.getTicks();
-
-        for (UUID playerId : new ArrayList<>(DREAM_WITHIN_DREAM_ORIGINAL_POS.keySet())) {
-            ActiveDream active = ACTIVE.get(playerId);
-            if (active == null || !active.dreamId().equals(SomniumMod.id("dream_within_dream"))) {
-                DREAM_WITHIN_DREAM_ORIGINAL_POS.remove(playerId);
-                DREAM_WITHIN_DREAM_CHUNKS.remove(playerId);
-                DREAM_WITHIN_DREAM_SIGN_START.remove(playerId);
-                DREAM_WITHIN_DREAM_ORIGINAL_WEATHER.remove(playerId);
-                continue;
-            }
-
-            ServerPlayerEntity player = server.getPlayerManager().getPlayer(playerId);
-            if (player == null || !(player.getEntityWorld() instanceof ServerWorld dreamWorld)) {
-                continue;
-            }
-
-            long elapsed = now - active.enterTick();
-
-            // После 20 секунд (400 тиков) начинаем показывать эффекты кошмара
-            if (elapsed >= 400) {
-                if (!DREAM_WITHIN_DREAM_SIGN_START.containsKey(playerId)) {
-                    DREAM_WITHIN_DREAM_SIGN_START.put(playerId, now);
-
-                    // Меняем время на ночь (18000 = полночь)
-                    long currentTime = dreamWorld.getTimeOfDay();
-                    long dayPart = currentTime % 24000L;
-                    long nightTime = currentTime - dayPart + 18000L;
-                    dreamWorld.setTimeOfDay(nightTime);
-
-                    // Включаем снегопад и грозу для красного неба
-                    dreamWorld.setWeather(0, 999999, true, true);
-
-                    // ИСПРАВЛЕНО: Используем playSound с координатами для клиента
-                    dreamWorld.playSound(
-                        null, // null = слышат все игроки рядом
-                        player.getX(),
-                        player.getY(),
-                        player.getZ(),
-                        com.somnium.mod.registry.ModSounds.DREAM_DREAD_AMBIENCE,
-                        net.minecraft.sound.SoundCategory.AMBIENT,
-                        2.0f, // громче
-                        0.5f
-                    );
-                    dreamWorld.playSound(
-                        null,
-                        player.getX(),
-                        player.getY(),
-                        player.getZ(),
-                        com.somnium.mod.registry.ModSounds.RUPTURE_STINGER,
-                        net.minecraft.sound.SoundCategory.HOSTILE,
-                        1.5f, // громче
-                        0.5f
-                    );
-
-                    SomniumMod.LOGGER.info("[Dream Within Dream] Кошмар начался для игрока {} (время изменено на ночь, погода: снег+гроза)",
-                        player.getName().getString());
-                }
-
-                // Показываем новое тревожное сообщение каждые 5 секунд (100 тиков)
-                long timeSinceSigns = now - DREAM_WITHIN_DREAM_SIGN_START.get(playerId);
-                if (timeSinceSigns > 0 && timeSinceSigns % 600 == 0) {
-                    // ДОБАВЛЕНО (выход из сна): раз в 30 секунд — едва заметная "трещина" в
-                    // кошмаре. Единственная НЕ красная подсказка указывает настоящий выход:
-                    // чтобы проснуться из сна-в-сне, нужно УСНУТЬ В НЁМ (ПКМ по своей кровати —
-                    // обработка в UseBlockCallback в SomniumMod). Красные надписи ("ПРЫГНИ" и т.п.)
-                    // — ложь кошмара, ведущая к гибели.
-                    showHint(player, "§8Кровать всё ещё стоит там, где ты уснул...", 8);
-                } else if (timeSinceSigns % 100 == 0) {
-                    showDisturbingMessage(player);
-                }
-            }
-        }
-    }
-
-    /**
-     * ДОБАВЛЕНО (сон "Сон-в-сне"): показывает тревожное красное сообщение на экране
-     */
-    private static void showDisturbingMessage(ServerPlayerEntity player) {
-        String[] messages = {
-            "§4§l§nПРЫГНИ",
-            "§4§l§nЗАКОНЧИ СТРАДАНИЯ",
-            "§4§l§nЭТО КОНЕЦ",
-            "§4§l§nНЕТ ВЫХОДА",
-            "§4§l§nОТПУСТИ",
-            "§4§l§nУМРИ",
-            "§4§l§nСПРЫГНИ ВНИЗ",
-            "§4§l§nОСВОБОДИСЬ",
-            "§4§l§nПАДАЙ",
-            "§4§l§nПРОВАЛИСЬ В БЕЗДНУ"
-        };
-        String message = messages[RANDOM.nextInt(messages.length)];
-
-        // Показываем в чате
-        player.sendMessage(
-            net.minecraft.text.Text.literal(message),
-            false
-        );
-
-        // Показываем в action bar (над хотбаром)
-        player.sendMessage(
-            net.minecraft.text.Text.literal(message),
-            true
-        );
-
-        // Звук тревоги (правильная сигнатура для ServerPlayerEntity)
-        player.playSound(
-            net.minecraft.sound.SoundEvents.ENTITY_WITHER_AMBIENT,
-            1.0f,
-            0.5f
-        );
+    /** Возвращает мир возврата для игрока во сне (для команд/отладки). */
+    @Nullable
+    public static RegistryKey<World> returnWorldOf(UUID playerId) {
+        Participant p = PARTICIPANTS.get(playerId);
+        return p == null ? null : p.snapshot.returnWorld;
     }
 }

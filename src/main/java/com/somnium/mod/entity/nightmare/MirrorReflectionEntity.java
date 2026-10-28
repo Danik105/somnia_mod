@@ -1,49 +1,48 @@
 package com.somnium.mod.entity.nightmare;
 
+import com.somnium.mod.entity.SkinOwner;
 import net.minecraft.entity.EntityType;
+import net.minecraft.entity.ai.goal.ActiveTargetGoal;
+import net.minecraft.entity.ai.goal.LookAtEntityGoal;
+import net.minecraft.entity.ai.goal.MeleeAttackGoal;
+import net.minecraft.entity.ai.goal.RevengeGoal;
+import net.minecraft.entity.ai.goal.SwimGoal;
 import net.minecraft.entity.attribute.DefaultAttributeContainer;
 import net.minecraft.entity.attribute.EntityAttributes;
-import net.minecraft.entity.damage.DamageSource;
+import net.minecraft.entity.data.DataTracker;
+import net.minecraft.entity.data.TrackedData;
+import net.minecraft.entity.data.TrackedDataHandlerRegistry;
+import net.minecraft.entity.effect.StatusEffectInstance;
+import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.sound.SoundCategory;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.World;
+import org.jetbrains.annotations.Nullable;
+
+import java.util.Optional;
+import java.util.UUID;
 
 /**
- * НОВЫЙ КОШМАР: Зеркальное отражение игрока.
- *
- * Поведение:
- * 1. Спавнится напротив игрока через "зеркало" (невидимую плоскость)
- * 2. Копирует внешний вид игрока (скин, одежда)
- * 3. Зеркально повторяет движения игрока (если игрок идёт вперёд, отражение идёт назад)
- * 4. Через некоторое время начинает "ломать зеркало" и атаковать
- * 5. Издаёт жуткие звуки (стекло, искажённые звуки игрока)
+ * Зеркальное отражение игрока (Зеркальная комната). Первые 20 секунд стоит за стеклом
+ * и зеркально повторяет движения своего игрока, потом стекло разбивается и отражение
+ * нападает, ослепляя жертву. Носит скин и имя своего игрока.
  */
-public class MirrorReflectionEntity extends AbstractNightmareEntity {
+public class MirrorReflectionEntity extends AbstractNightmareEntity implements SkinOwner {
 
-    private static final int BREAK_GLASS_DELAY = 400; // 20 секунд до начала атаки (400 тиков)
+    private static final TrackedData<Optional<UUID>> SKIN_OWNER =
+            DataTracker.registerData(MirrorReflectionEntity.class, TrackedDataHandlerRegistry.OPTIONAL_UUID);
+    private static final int BREAK_GLASS_DELAY = 400;
+
     private int ticksAlive = 0;
-    private boolean glassBreaking = false;
-    private ServerPlayerEntity targetPlayer;
-    private BlockPos mirrorPlanePos; // Центр "зеркала"
+    private boolean attacking = false;
+    @Nullable private ServerPlayerEntity targetPlayer;
+    @Nullable private BlockPos mirrorPlanePos;
 
     public MirrorReflectionEntity(EntityType<? extends AbstractNightmareEntity> type, World world) {
         super(type, world);
-        // ДОБАВЛЕНО: показываем ник (Custom Name Visible) для зеркального отражения
-        this.setCustomNameVisible(true);
-    }
-
-    /**
-     * ИСПРАВЛЕНО: НЕ добавляем стандартный AI пока моб в зеркальном режиме.
-     * Первые 20 секунд моб только повторяет движения игрока (без блуждания).
-     * После разбития стекла - добавляем боевой AI.
-     */
-    @Override
-    protected void initGoals() {
-        // В начале НЕ добавляем никаких AI целей - моб полностью контролируется вручную
-        // через mirrorPlayerMovement(). AI будет добавлен позже в startAttacking().
     }
 
     public static DefaultAttributeContainer.Builder createMirrorReflectionAttributes() {
@@ -54,12 +53,33 @@ public class MirrorReflectionEntity extends AbstractNightmareEntity {
                 .add(EntityAttributes.GENERIC_FOLLOW_RANGE, 64.0);
     }
 
-    public void setTargetPlayer(ServerPlayerEntity player) {
+    @Override
+    protected void initDataTracker() {
+        super.initDataTracker();
+        this.dataTracker.startTracking(SKIN_OWNER, Optional.empty());
+    }
+
+    @Override
+    public Optional<UUID> getSkinOwner() {
+        return this.dataTracker.get(SKIN_OWNER);
+    }
+
+    /** Боевой ИИ включается только после разбития стекла (startAttacking). */
+    @Override
+    protected void initGoals() {}
+
+    public void setTargetPlayer(@Nullable ServerPlayerEntity player) {
         this.targetPlayer = player;
-        // ДОБАВЛЕНО: устанавливаем ник игрока как имя моба
         if (player != null) {
             this.setCustomName(player.getName());
+            this.setCustomNameVisible(true);
+            this.dataTracker.set(SKIN_OWNER, Optional.of(player.getUuid()));
+            if (attacking) this.setTarget(player);
         }
+    }
+
+    public boolean isTarget(ServerPlayerEntity player) {
+        return targetPlayer == player;
     }
 
     public void setMirrorPlane(BlockPos pos) {
@@ -69,139 +89,66 @@ public class MirrorReflectionEntity extends AbstractNightmareEntity {
     @Override
     public void tick() {
         super.tick();
-
-        if (this.getEntityWorld().isClient()) return;
-
+        if (this.getWorld().isClient()) return;
         ticksAlive++;
 
-        // ИСПРАВЛЕНИЕ: не удаляем моба, если он еще не инициализирован (первые 30 тиков)
-        // targetPlayer устанавливается через ~10 тиков после спавна, даем время на инициализацию
-        if (ticksAlive > 30) {
-            if (targetPlayer == null || !targetPlayer.isAlive()) {
-                this.discard();
-                return;
-            }
+        // Без своего игрока отражению незачем существовать (игрок проснулся, перезапуск сервера)
+        if (ticksAlive > 30 && (targetPlayer == null || targetPlayer.isRemoved()
+                || targetPlayer.getWorld() != this.getWorld())) {
+            this.discard();
+            return;
         }
-
-        // Первые 20 секунд - зеркальное отражение (молчаливое следование)
         if (ticksAlive < BREAK_GLASS_DELAY) {
-            // ДОБАВЛЕНО: логирование для отладки
-            if (ticksAlive % 20 == 0) { // Раз в секунду
-                if (mirrorPlanePos == null) {
-                    com.somnium.mod.SomniumMod.LOGGER.warn("[MirrorReflection] mirrorPlanePos is NULL!");
-                } else {
-                    com.somnium.mod.SomniumMod.LOGGER.info("[MirrorReflection] Following player. Mirror at X={}, Player at X={}, Mob at X={}",
-                        mirrorPlanePos.getX(), targetPlayer.getX(), this.getX());
-                }
-            }
             mirrorPlayerMovement();
-
-            // Звук стекла при начале "трещин" (за 1 секунду до атаки)
             if (ticksAlive == BREAK_GLASS_DELAY - 20) {
-                this.getEntityWorld().playSound(null, this.getBlockPos(),
-                        SoundEvents.BLOCK_GLASS_BREAK,
-                        net.minecraft.sound.SoundCategory.HOSTILE,
-                        2.0f, 0.5f);
+                this.getWorld().playSound(null, this.getBlockPos(), SoundEvents.BLOCK_GLASS_BREAK,
+                        SoundCategory.HOSTILE, 2.0f, 0.5f);
             }
-        }
-        // После - начинаем атаку
-        else if (!glassBreaking) {
-            glassBreaking = true;
+        } else if (!attacking) {
+            attacking = true;
             startAttacking();
         }
-
-        // ИЗМЕНЕНО: жуткие звуки только ПОСЛЕ начала атаки (не во время зеркального следования)
-        if (glassBreaking && ticksAlive % 60 == 0) {
-            this.getEntityWorld().playSound(null, this.getBlockPos(),
-                    SoundEvents.ENTITY_ENDERMAN_SCREAM,
-                    net.minecraft.sound.SoundCategory.HOSTILE,
-                    1.0f, 0.3f);
+        if (attacking && ticksAlive % 60 == 0) {
+            this.getWorld().playSound(null, this.getBlockPos(), SoundEvents.ENTITY_ENDERMAN_SCREAM,
+                    SoundCategory.HOSTILE, 1.0f, 0.3f);
         }
     }
 
-    /**
-     * ИСПРАВЛЕНО: Зеркально копирует движения игрока через стекло.
-     * Моб находится ЗА СТЕКЛОМ и повторяет действия игрока зеркально,
-     * пока стекло не разобьётся через 20 секунд.
-     */
+    /** Зеркальная позиция относительно плоскости стекла (ось X), зеркальный поворот головы. */
     private void mirrorPlayerMovement() {
         if (mirrorPlanePos == null || targetPlayer == null) return;
-
-        Vec3d playerPos = new Vec3d(targetPlayer.getX(), targetPlayer.getY(), targetPlayer.getZ());
-
-        // ИСПРАВЛЕНО: вычисляем зеркальную позицию относительно плоскости стекла
-        // Стекло на mirrorPlanePos.X (это X координата центра стекла)
-        // Если игрок на расстоянии D слева от стекла, моб на расстоянии D справа
-        double mirrorX = mirrorPlanePos.getX();
-        double distanceFromMirror = playerPos.x - mirrorX; // Расстояние игрока от стекла
-        double mirroredX = mirrorX - distanceFromMirror; // Зеркальная позиция
-
-        // Телепортируем отражение в зеркальную позицию
-        this.setPosition(mirroredX, playerPos.y, playerPos.z);
-
-        // ИСПРАВЛЕНО: сбрасываем velocity чтобы моб не продолжал двигаться по инерции
+        double mirrorX = mirrorPlanePos.getX() + 0.5;
+        double mirroredX = mirrorX - (targetPlayer.getX() - mirrorX);
+        this.setPosition(mirroredX, targetPlayer.getY(), targetPlayer.getZ());
         this.setVelocity(0, 0, 0);
-
-        // ИСПРАВЛЕНО: моб смотрит в зеркально противоположную сторону
-        // В Minecraft yaw: 0°=юг, 90°=запад, 180°=север, 270°=восток
-        // Для зеркала по оси X: mirroredYaw = -playerYaw
         float mirroredYaw = -targetPlayer.getYaw();
         this.setYaw(mirroredYaw);
-        this.headYaw = mirroredYaw; // Поворот головы тоже синхронизируем
-        this.bodyYaw = mirroredYaw; // И тела
-
-        // Pitch остаётся таким же (наклон вверх/вниз не зеркалится горизонтальным зеркалом)
+        this.headYaw = mirroredYaw;
+        this.bodyYaw = mirroredYaw;
         this.setPitch(targetPlayer.getPitch());
-
-        // Копируем анимацию (приседание, спринт и т.д.)
         this.setSneaking(targetPlayer.isSneaking());
         this.setSprinting(targetPlayer.isSprinting());
     }
 
-    /**
-     * Начинает агрессивное преследование игрока после "разбития зеркала"
-     */
     private void startAttacking() {
-        // Звук разбитого стекла
-        this.getEntityWorld().playSound(null, this.getBlockPos(),
-                SoundEvents.BLOCK_GLASS_BREAK,
-                net.minecraft.sound.SoundCategory.HOSTILE,
-                3.0f, 0.3f);
-
-        // ДОБАВЛЕНО: накладываем эффект слепоты на игрока ПОСЛЕ звука стекла
-        if (targetPlayer != null && targetPlayer.isAlive()) {
-            targetPlayer.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
-                    net.minecraft.entity.effect.StatusEffects.BLINDNESS,
-                    400, // 20 секунд (остаток сна)
-                    1, // уровень II (сильная слепота)
-                    false, false, true
-            ));
+        this.getWorld().playSound(null, this.getBlockPos(), SoundEvents.BLOCK_GLASS_BREAK, SoundCategory.HOSTILE, 3.0f, 0.3f);
+        if (targetPlayer != null) {
+            targetPlayer.addStatusEffect(new StatusEffectInstance(StatusEffects.BLINDNESS, 200, 0, false, false, true));
+            this.setTarget(targetPlayer);
         }
-
-        // Устанавливаем цель атаки
-        this.setTarget(targetPlayer);
-
-        // Увеличиваем скорость для рывка
         this.getAttributeInstance(EntityAttributes.GENERIC_MOVEMENT_SPEED).setBaseValue(0.35);
-
-        // ДОБАВЛЕНО: теперь включаем боевой AI (ранее был отключен)
-        this.goalSelector.add(0, new net.minecraft.entity.ai.goal.SwimGoal(this));
-        this.goalSelector.add(1, new net.minecraft.entity.ai.goal.MeleeAttackGoal(this, 1.2, false));
-        this.goalSelector.add(2, new net.minecraft.entity.ai.goal.LookAtEntityGoal(this, PlayerEntity.class, 12.0f));
-        this.targetSelector.add(1, new net.minecraft.entity.ai.goal.RevengeGoal(this));
-        this.targetSelector.add(2, new net.minecraft.entity.ai.goal.ActiveTargetGoal<>(this, PlayerEntity.class, true));
+        this.goalSelector.add(0, new SwimGoal(this));
+        this.goalSelector.add(1, new MeleeAttackGoal(this, 1.2, false));
+        this.goalSelector.add(2, new LookAtEntityGoal(this, PlayerEntity.class, 12.0f));
+        this.targetSelector.add(1, new RevengeGoal(this));
+        this.targetSelector.add(2, new ActiveTargetGoal<>(this, PlayerEntity.class, true));
     }
 
     @Override
-    public void onDeath(DamageSource damageSource) {
-        super.onDeath(damageSource);
-
-        // Звук разбитого зеркала при смерти
-        if (!this.getEntityWorld().isClient()) {
-            this.getEntityWorld().playSound(null, this.getBlockPos(),
-                    SoundEvents.BLOCK_GLASS_BREAK,
-                    net.minecraft.sound.SoundCategory.HOSTILE,
-                    2.0f, 1.0f);
+    public void onDeath(net.minecraft.entity.damage.DamageSource source) {
+        super.onDeath(source);
+        if (!this.getWorld().isClient()) {
+            this.getWorld().playSound(null, this.getBlockPos(), SoundEvents.BLOCK_GLASS_BREAK, SoundCategory.HOSTILE, 2.0f, 1.0f);
         }
     }
 }

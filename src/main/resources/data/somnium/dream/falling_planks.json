@@ -1,13 +1,10 @@
 {
-  "id": "somnium:falling_planks",
-  "display_name_key": "somnium.dream.falling_planks",
-  "structure_template": "somnium:falling_planks_void",
-  "monster_entity_ids": [],
-  "base_weight": 12,
-  "min_sanity_to_appear": 100.0,
-  "duration_ticks": 3600,
-  "objective": "Подъезд, как в многоэтажке: марши уходят вверх и обрушаются за спиной — поднимайся, не стой на месте. Бирюзовые гнилые ступени (дымятся) ломаются под ногами. На последнем этаже открой люк в потолке (ПКМ) — там выход.",
-  "objective_type": null,
-  "objective_target_id": null,
-  "objective_count": 0
+  "name": "somnium.dream.falling_planks",
+  "objective": "somnium.dream.falling_planks.objective",
+  "dimension": "somnium:dream_falling_planks",
+  "scenario": "somnium:stairwell",
+  "monsters": [],
+  "weight": 12,
+  "max_sanity": 100,
+  "duration_ticks": 3600
 }

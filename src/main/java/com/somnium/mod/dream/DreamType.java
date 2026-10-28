@@ -1,42 +1,34 @@
 package com.somnium.mod.dream;
 
+import net.minecraft.registry.RegistryKey;
 import net.minecraft.util.Identifier;
+import net.minecraft.world.World;
 
 import java.util.List;
 
 /**
- * Описание одного типа сна. Загружается из JSON (data/somnium/dream/*.json),
- * что позволяет добавлять новые сны без перекомпиляции мода (data-pack friendly).
+ * Описание типа сна. Загружается из data/&lt;namespace&gt;/dream/*.json (см. DreamRegistry),
+ * поэтому веса, длительность, монстров и порог рассудка можно менять датапаком.
  *
- * @param id                уникальный id сна, например "somnium:drowning_city"
- * @param displayNameKey    ключ перевода для названия (показывается при входе в сон)
- * @param structureTemplate id NBT-структуры/шаблона локации сна (или "PROCEDURAL" для генератора)
- * @param monsterEntityIds  список id кастомных сущностей-монстров этого сна
- * @param baseWeight        базовый вес выбора сна (для взвешенной случайности)
- * @param minSanityToAppear сон может выпасть только если рассудок игрока <= этого значения (100 = всегда доступен)
- * @param durationTicks     сколько тиков длится сон, если игрок не найдёт "Дверь пробуждения" раньше
- * @param objective         текстовое описание цели сна, показывается в HUD
- * @param objectiveType     ИСПРАВЛЕНИЕ ("задание сна нельзя выполнить"): раньше {@code objective}
- *                          был чисто текстовым — ничего в коде его не проверяло. Это поле говорит
- *                          DreamManager, КАК проверять выполнение цели (см. DreamObjectiveType).
- * @param objectiveTargetId для BOSS_KILL — id сущности, которую нужно победить (спавнится
- *                          гарантированно один раз, отдельно от рядовых монстров сна); для
- *                          COLLECT_ITEMS — id предмета, который нужно собрать; null для REACH_DOOR
- * @param objectiveCount    для COLLECT_ITEMS — сколько предметов нужно собрать; не используется
- *                          другими типами целей
+ * @param id           id сна (= имя файла), например somnium:drowning_city
+ * @param nameKey      ключ перевода названия
+ * @param objectiveKey ключ перевода цели (показывается в чате при входе)
+ * @param dimension    измерение, в котором строится сон
+ * @param scenario     id Java-сценария (DreamScenarios), который строит и ведёт сон
+ * @param monsters     монстры, которых сценарий расставляет при входе и которые
+ *                     прорываются в явь при низком рассудке
+ * @param weight       вес при случайном выборе сна
+ * @param maxSanity    сон выпадает, только если рассудок не выше этого значения
+ * @param durationTicks сколько длится сон до пробуждения по таймеру
  */
 public record DreamType(
         Identifier id,
-        String displayNameKey,
-        String structureTemplate,
-        List<Identifier> monsterEntityIds,
-        int baseWeight,
-        float minSanityToAppear,
-        long durationTicks,
-        String objective,
-        DreamObjectiveType objectiveType,
-        Identifier objectiveTargetId,
-        int objectiveCount
-) {
-    public static final long DEFAULT_DURATION_TICKS = 6000L; // 5 минут реального времени
-}
+        String nameKey,
+        String objectiveKey,
+        RegistryKey<World> dimension,
+        Identifier scenario,
+        List<Identifier> monsters,
+        int weight,
+        float maxSanity,
+        int durationTicks
+) {}

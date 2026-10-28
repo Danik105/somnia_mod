@@ -1,11 +1,12 @@
 {
-  "display_name_key": "somnium.dream.void_of_eyes",
-  "structure_template": "somnium:void_of_eyes_procedural",
-  "monster_entity_ids": [
+  "name": "somnium.dream.void_of_eyes",
+  "objective": "somnium.dream.void_of_eyes.objective",
+  "dimension": "somnium:dream_void_of_eyes",
+  "scenario": "somnium:void_of_eyes",
+  "monsters": [
     "somnium:watcher"
   ],
-  "base_weight": 14,
-  "min_sanity_to_appear": 100,
-  "duration_ticks": 4800,
-  "objective": "Перехвати взгляд 5 Наблюдателей — смотри каждому прямо в глаза, пока он не сгорит."
+  "weight": 14,
+  "max_sanity": 100,
+  "duration_ticks": 4800
 }
