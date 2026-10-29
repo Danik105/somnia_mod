@@ -9,10 +9,12 @@ import com.somnium.mod.sanity.SanityManager;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
+import net.minecraft.block.DoorBlock;
+import net.minecraft.block.PaneBlock;
 import net.minecraft.block.StairsBlock;
 import net.minecraft.block.TrapdoorBlock;
-import net.minecraft.block.WallTorchBlock;
 import net.minecraft.block.enums.BlockHalf;
+import net.minecraft.block.enums.DoubleBlockHalf;
 import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.particle.BlockStateParticleEffect;
 import net.minecraft.particle.ParticleTypes;
@@ -37,11 +39,13 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Подъезд ("Лестница в никуда", id сна falling_planks): лестничная клетка многоэтажки над
- * пустотой. Марши достраиваются вверх по мере подъёма, обрушаются за спиной, ряды ступеней
- * впереди трещат и осыпаются волной (и "заживают" через 4,5 с), гнилые бирюзовые ступени
- * ломаются под ногами. Сорвался в пролёт — приходишь в себя на последней надёжной ступени.
- * Выход — люк в потолке последнего этажа.
+ * Подъезд ("Лестница в никуда", id сна falling_planks): лестничная клетка старого дома над
+ * пустотой. Стены как в настоящем подъезде: до плеча зелёная масляная краска (линия идёт
+ * вдоль ступеней), выше побелка. На этажах двери квартир и лампочка, на межэтажных
+ * площадках окно в темноту и батарея. Марши достраиваются вверх по мере подъёма и
+ * обрушаются за спиной, ряды ступеней впереди трещат и осыпаются волной (через 4,5 с
+ * "заживают"), треснувшие ступени ломаются под ногами. Сорвался в пролёт — приходишь в себя
+ * на последней надёжной ступени. Выход — люк в потолке последнего этажа.
  *
  * В группе марши строятся по самому высокому игроку, а рушатся за самым низким.
  */
@@ -62,6 +66,18 @@ public final class StairwellScenario extends DreamScenario {
     private static final int CRUMBLE_WARN_TICKS = 2;
     private static final int CRUMBLE_ROW_INTERVAL = 4;
     private static final int CRUMBLE_RESTORE_TICKS = 90;
+
+    private static final Block STEP = Blocks.STONE_STAIRS;
+    private static final Block RISER = Blocks.STONE;
+    private static final Block CRACKED_STEP = Blocks.COBBLESTONE_STAIRS;
+    private static final Block TILE = Blocks.ANDESITE;
+    private static final Block TILE_BORDER = Blocks.RED_TERRACOTTA;
+    private static final Block PAINT = Blocks.WAXED_OXIDIZED_CUT_COPPER;
+    private static final Block PAINT_WORN = Blocks.WAXED_WEATHERED_CUT_COPPER;
+    private static final Block WHITEWASH = Blocks.CALCITE;
+    private static final Block WHITEWASH_DIRTY = Blocks.DIORITE;
+    private static final Block LAMP = Blocks.OCHRE_FROGLIGHT;
+    private static final Set<Block> SAFE = Set.of(STEP, RISER, TILE, TILE_BORDER);
 
     private record Crumble(List<BlockPos> positions, List<BlockState> states, int stage, long breakTick) {}
 
@@ -106,7 +122,7 @@ public final class StairwellScenario extends DreamScenario {
         buildWalls(world, center.getY() - 8, center.getY() + 10);
         ceilingY = center.getY() + 10;
         wallTopY = ceilingY;
-        fillCeiling(world, ceilingY, Blocks.PRISMARINE_BRICKS.getDefaultState());
+        fillCeiling(world, ceilingY, WHITEWASH.getDefaultState());
         for (int stage = 0; stage <= 3; stage++) buildStage(session, stage);
         built = 4;
         return center;
@@ -157,21 +173,22 @@ public final class StairwellScenario extends DreamScenario {
         }
 
         // Достройка вперёд и подъём временного потолка
+        // Стены поднимаем до постройки маршей: окна, двери и лампы встраиваются в готовую стену
         int target = Math.min(highest + BUILD_AHEAD + 1, FINAL_STAGE + 1);
+        if (hatch == null) {
+            int needed = center.getY() + Math.min(target, FINAL_STAGE) * 2 + 4;
+            if (needed > ceilingY) {
+                fillCeiling(world, ceilingY, Blocks.AIR.getDefaultState());
+                buildWalls(world, wallTopY + 1, needed);
+                fillCeiling(world, needed, WHITEWASH.getDefaultState());
+                wallTopY = needed;
+                ceilingY = needed;
+            }
+        }
         while (built < target) {
             if (built == FINAL_STAGE) buildFinal(session);
             else buildStage(session, built);
             built++;
-        }
-        if (hatch == null) {
-            int needed = center.getY() + built * 2 + 4;
-            if (needed > ceilingY) {
-                fillCeiling(world, ceilingY, Blocks.AIR.getDefaultState());
-                buildWalls(world, wallTopY + 1, needed);
-                fillCeiling(world, needed, Blocks.PRISMARINE_BRICKS.getDefaultState());
-                wallTopY = needed;
-                ceilingY = needed;
-            }
         }
 
         // Обрушение за спиной самого низкого игрока
@@ -182,12 +199,13 @@ public final class StairwellScenario extends DreamScenario {
         }
         if (!collapseQueue.isEmpty() && now % 2 == 0) {
             BlockPos falling = collapseQueue.poll();
+            BlockState was = world.getBlockState(falling);
             set(world, falling, Blocks.AIR.getDefaultState());
             rotten.remove(falling);
             ServerPlayerEntity near = session.nearestPlayer(falling.toCenterPos());
-            if (near != null && near.squaredDistanceTo(falling.toCenterPos()) < 500) {
+            if (near != null && near.squaredDistanceTo(falling.toCenterPos()) < 500 && !was.isAir()) {
                 session.sound(falling, SoundEvents.BLOCK_STONE_BREAK, SoundCategory.BLOCKS, 0.9f, 0.7f);
-                world.spawnParticles(new BlockStateParticleEffect(ParticleTypes.BLOCK, Blocks.POLISHED_ANDESITE.getDefaultState()),
+                world.spawnParticles(new BlockStateParticleEffect(ParticleTypes.BLOCK, was),
                         falling.getX() + 0.5, falling.getY() + 0.5, falling.getZ() + 0.5, 10, 0.25, 0.25, 0.25, 0.05);
             }
         }
@@ -234,18 +252,18 @@ public final class StairwellScenario extends DreamScenario {
 
         tickCrumble(session, state, stage, support, now);
 
-        // Гнилые ступени: скрип и пролом под ногами
+        // Треснувшие ступени: хруст и пролом под ногами
         if (rotten.contains(support) && player.isOnGround()) {
             state.rottenStand++;
             if (state.rottenStand == 1 || state.rottenStand % 5 == 0) {
-                session.sound(support, SoundEvents.BLOCK_WOOD_HIT, SoundCategory.BLOCKS, 0.9f, 0.5f);
+                session.sound(support, SoundEvents.BLOCK_GRAVEL_HIT, SoundCategory.BLOCKS, 0.9f, 0.5f);
             }
             if (state.rottenStand >= ROTTEN_BREAK_TICKS) {
                 rotten.remove(support);
                 state.rottenStand = 0;
                 set(world, support, Blocks.AIR.getDefaultState());
-                session.sound(support, SoundEvents.BLOCK_WOOD_BREAK, SoundCategory.BLOCKS, 1.0f, 0.6f);
-                world.spawnParticles(new BlockStateParticleEffect(ParticleTypes.BLOCK, Blocks.WARPED_PLANKS.getDefaultState()),
+                session.sound(support, SoundEvents.BLOCK_STONE_BREAK, SoundCategory.BLOCKS, 1.0f, 0.6f);
+                world.spawnParticles(new BlockStateParticleEffect(ParticleTypes.BLOCK, CRACKED_STEP.getDefaultState()),
                         support.getX() + 0.5, support.getY() + 0.5, support.getZ() + 0.5, 20, 0.3, 0.3, 0.3, 0.08);
                 SanityManager.add(player, ROTTEN_SANITY);
                 player.sendMessage(tr("somnium.hint.stairwell.rotten").formatted(Formatting.GRAY), true);
@@ -265,12 +283,11 @@ public final class StairwellScenario extends DreamScenario {
             }
         }
 
-        // Последняя надёжная ступень и мягкая ловля падения (гнилые не запоминаем)
+        // Последняя надёжная ступень и мягкая ловля падения (треснувшие не запоминаем)
         int dz = support.getZ() - center.getZ();
         if (player.isOnGround() && Math.abs(support.getX() - center.getX()) <= 3 && dz >= -13 && dz <= 1
                 && !rotten.contains(support)) {
-            Block block = world.getBlockState(support).getBlock();
-            if (block == Blocks.POLISHED_ANDESITE_STAIRS || block == Blocks.POLISHED_ANDESITE) {
+            if (SAFE.contains(world.getBlockState(support).getBlock())) {
                 state.lastSafe = player.getPos();
             }
         }
@@ -342,7 +359,7 @@ public final class StairwellScenario extends DreamScenario {
             }
             BlockPos first = pending.positions().get(0);
             session.sound(first, SoundEvents.BLOCK_STONE_BREAK, SoundCategory.BLOCKS, 1.0f, 0.6f);
-            world.spawnParticles(new BlockStateParticleEffect(ParticleTypes.BLOCK, Blocks.POLISHED_ANDESITE.getDefaultState()),
+            world.spawnParticles(new BlockStateParticleEffect(ParticleTypes.BLOCK, RISER.getDefaultState()),
                     first.getX() + 0.5, first.getY() + 0.5, first.getZ() + 0.5, 20, 0.5, 0.3, 0.5, 0.06);
             state.nextCrumbleTick = now + CRUMBLE_ROW_INTERVAL;
         }
@@ -357,7 +374,7 @@ public final class StairwellScenario extends DreamScenario {
         Map<Integer, List<BlockPos>> rows = new HashMap<>();
         Map<Integer, Integer> rowY = new HashMap<>();
         for (BlockPos pos : stageBlocks.get(stage)) {
-            if (!world.getBlockState(pos).isOf(Blocks.POLISHED_ANDESITE_STAIRS)) continue;
+            if (!world.getBlockState(pos).isOf(STEP)) continue;
             rows.computeIfAbsent(pos.getZ(), k -> new ArrayList<>()).add(pos);
             rowY.put(pos.getZ(), pos.getY());
         }
@@ -379,7 +396,7 @@ public final class StairwellScenario extends DreamScenario {
             positions.add(stair);
             states.add(world.getBlockState(stair));
             BlockPos riser = stair.down();
-            if (world.getBlockState(riser).isOf(Blocks.POLISHED_ANDESITE)) {
+            if (world.getBlockState(riser).isOf(RISER)) {
                 positions.add(riser);
                 states.add(world.getBlockState(riser));
             }
@@ -394,18 +411,44 @@ public final class StairwellScenario extends DreamScenario {
 
     // ----- постройка -----
 
-    /** Стены клетки: мятный призмарин с поясами из кирпичей; клетка 7×15 вокруг center. */
+    /**
+     * Стены клетки 7×15 вокруг center. Два блока над полом или ступенью у стены — зелёная
+     * краска (с потёртостями), выше побелка с грязными пятнами. Линия краски повторяет
+     * наклон марша, как в настоящем подъезде.
+     */
     private void buildWalls(ServerWorld world, int y0, int y1) {
         for (int y = y0; y <= y1; y++) {
-            boolean band = Math.floorMod(y - center.getY(), 4) == 0;
-            BlockState state = (band ? Blocks.PRISMARINE_BRICKS : Blocks.PRISMARINE).getDefaultState();
             for (int x = -3; x <= 3; x++) {
                 for (int z = -13; z <= 1; z++) {
                     if (Math.abs(x) != 3 && z != -13 && z != 1) continue;
-                    setBulk(world, new BlockPos(center.getX() + x, y, center.getZ() + z), state);
+                    BlockPos pos = new BlockPos(center.getX() + x, y, center.getZ() + z);
+                    setBulk(world, pos, wallState(x, y, z, pos));
                 }
             }
         }
+    }
+
+    private BlockState wallState(int x, int y, int z, BlockPos pos) {
+        int f = Math.floorDiv(y - (center.getY() - 1), 8);
+        int above = Integer.MAX_VALUE;
+        for (int floor = f - 1; floor <= f; floor++) {
+            if (floor < 0) continue;
+            int h = y - wallFloorY(x, z, floor);
+            if (h >= 1) above = Math.min(above, h);
+        }
+        long hash = pos.asLong() * 0x9E3779B97F4A7C15L;
+        boolean stain = ((hash >>> 40) & 15) == 0;
+        if (above <= 2) return (stain ? PAINT_WORN : PAINT).getDefaultState();
+        return (stain ? WHITEWASH_DIRTY : WHITEWASH).getDefaultState();
+    }
+
+    /** Высота пола (ступени, площадки) у стены в точке (x, z) на этаже floor. */
+    private int wallFloorY(int x, int z, int floor) {
+        int base = center.getY() - 1 + floor * 8;
+        if (z <= -10) return base + 4;
+        if (z >= -1) return base;
+        if (x < 0) return base + 1 + (-2 - z) / 2;
+        return base + 5 + (z + 9) / 2;
     }
 
     private void fillCeiling(ServerWorld world, int y, BlockState state) {
@@ -429,18 +472,10 @@ public final class StairwellScenario extends DreamScenario {
         int baseY = center.getY() - 1 + floor * 8;
 
         if (part == 0) {
-            for (int x = -2; x <= 2; x++) {
-                for (int z = -1; z <= 0; z++) {
-                    BlockPos pos = new BlockPos(center.getX() + x, baseY, center.getZ() + z);
-                    set(world, pos, Blocks.POLISHED_ANDESITE.getDefaultState());
-                    blocks.add(pos);
-                }
-            }
-            boolean west = floor % 2 == 0;
-            BlockPos torch = new BlockPos(center.getX() + (west ? -2 : 2), baseY + 2, center.getZ());
-            set(world, torch, Blocks.SOUL_WALL_TORCH.getDefaultState()
-                    .with(WallTorchBlock.FACING, west ? Direction.EAST : Direction.WEST));
-            blocks.add(torch);
+            buildFloorLanding(world, baseY, blocks);
+            // Две квартиры: за дверью глухая чернота, над ними голая лампочка
+            for (int x : new int[]{-2, 2}) buildDoor(world, baseY + 1, x);
+            setBulk(world, new BlockPos(center.getX(), baseY + 3, center.getZ() + 1), LAMP.getDefaultState());
         } else if (part == 1 || part == 3) {
             boolean first = part == 1;
             int marchBaseY = first ? baseY : baseY + 4;
@@ -453,7 +488,7 @@ public final class StairwellScenario extends DreamScenario {
                 int y = marchBaseY + 1 + i / 2;
                 BlockHalf half = i % 2 == 0 ? BlockHalf.BOTTOM : BlockHalf.TOP;
                 boolean isRotten = floor >= ROTTEN_START_FLOOR && session.random.nextDouble() < ROTTEN_CHANCE;
-                Block step = isRotten ? Blocks.WARPED_STAIRS : Blocks.POLISHED_ANDESITE_STAIRS;
+                Block step = isRotten ? CRACKED_STEP : STEP;
                 for (int x : new int[]{x1, x2}) {
                     BlockPos pos = new BlockPos(center.getX() + x, y, center.getZ() + z);
                     set(world, pos, step.getDefaultState().with(StairsBlock.FACING, uphill).with(StairsBlock.HALF, half));
@@ -463,13 +498,14 @@ public final class StairwellScenario extends DreamScenario {
                     } else {
                         BlockPos riser = pos.down();
                         if (world.getBlockState(riser).isAir()) {
-                            set(world, riser, Blocks.POLISHED_ANDESITE.getDefaultState());
+                            set(world, riser, RISER.getDefaultState());
                             blocks.add(riser);
                         }
                     }
                 }
                 BlockPos rail = new BlockPos(center.getX(), y + 1, center.getZ() + z);
-                set(world, rail, Blocks.IRON_BARS.getDefaultState());
+                set(world, rail, Blocks.IRON_BARS.getDefaultState()
+                        .with(PaneBlock.NORTH, true).with(PaneBlock.SOUTH, true));
                 blocks.add(rail);
             }
         } else {
@@ -477,22 +513,47 @@ public final class StairwellScenario extends DreamScenario {
             for (int x = -2; x <= 2; x++) {
                 for (int z = -12; z <= -10; z++) {
                     BlockPos pos = new BlockPos(center.getX() + x, landY, center.getZ() + z);
-                    set(world, pos, Blocks.POLISHED_ANDESITE.getDefaultState());
+                    boolean border = z == -10 || Math.abs(x) == 2;
+                    set(world, pos, (border ? TILE_BORDER : TILE).getDefaultState());
                     blocks.add(pos);
                 }
             }
+            // Окно в темноту и чугунная батарея под ним
             for (int x = -1; x <= 0; x++) {
-                for (int y = landY + 1; y <= landY + 2; y++) {
-                    set(world, new BlockPos(center.getX() + x, y, center.getZ() - 13), Blocks.GLASS.getDefaultState());
+                for (int y = landY + 2; y <= landY + 3; y++) {
+                    setBulk(world, new BlockPos(center.getX() + x, y, center.getZ() - 13), Blocks.GLASS_PANE.getDefaultState()
+                            .with(PaneBlock.EAST, true).with(PaneBlock.WEST, true));
                 }
+                BlockPos radiator = new BlockPos(center.getX() + x, landY + 1, center.getZ() - 12);
+                setBulk(world, radiator, Blocks.IRON_TRAPDOOR.getDefaultState()
+                        .with(TrapdoorBlock.FACING, Direction.SOUTH).with(TrapdoorBlock.OPEN, true));
+                blocks.add(radiator);
             }
-            boolean west = floor % 2 == 0;
-            BlockPos torch = new BlockPos(center.getX() + (west ? -2 : 2), landY + 2, center.getZ() - 11);
-            set(world, torch, Blocks.SOUL_WALL_TORCH.getDefaultState()
-                    .with(WallTorchBlock.FACING, west ? Direction.EAST : Direction.WEST));
-            blocks.add(torch);
+            setBulk(world, new BlockPos(center.getX() + (floor % 2 == 0 ? -2 : 1), landY + 4, center.getZ() - 13),
+                    LAMP.getDefaultState());
         }
         stageBlocks.add(blocks);
+    }
+
+    /** Площадка этажа 5×2: плитка, у края марша красный бордюр. */
+    private void buildFloorLanding(ServerWorld world, int y, List<BlockPos> blocks) {
+        for (int x = -2; x <= 2; x++) {
+            for (int z = -1; z <= 0; z++) {
+                BlockPos pos = new BlockPos(center.getX() + x, y, center.getZ() + z);
+                set(world, pos, (z == -1 ? TILE_BORDER : TILE).getDefaultState());
+                blocks.add(pos);
+            }
+        }
+    }
+
+    /** Дверь квартиры в южной стене; за ней чёрный блок, чтобы открытая дверь вела в никуда. */
+    private void buildDoor(ServerWorld world, int y, int x) {
+        BlockPos lower = new BlockPos(center.getX() + x, y, center.getZ() + 1);
+        BlockState door = Blocks.DARK_OAK_DOOR.getDefaultState().with(DoorBlock.FACING, Direction.NORTH);
+        setBulk(world, lower, door.with(DoorBlock.HALF, DoubleBlockHalf.LOWER));
+        setBulk(world, lower.up(), door.with(DoorBlock.HALF, DoubleBlockHalf.UPPER));
+        setBulk(world, lower.south(), Blocks.BLACK_CONCRETE.getDefaultState());
+        setBulk(world, lower.south().up(), Blocks.BLACK_CONCRETE.getDefaultState());
     }
 
     /** Площадка последнего этажа, глухой потолок и люк со светом пробуждения за ним. */
@@ -500,25 +561,18 @@ public final class StairwellScenario extends DreamScenario {
         ServerWorld world = session.world;
         int landingY = center.getY() - 1 + FLOORS * 8;
         List<BlockPos> blocks = new ArrayList<>();
-        for (int x = -2; x <= 2; x++) {
-            for (int z = -1; z <= 0; z++) {
-                BlockPos pos = new BlockPos(center.getX() + x, landingY, center.getZ() + z);
-                set(world, pos, Blocks.POLISHED_ANDESITE.getDefaultState());
-                blocks.add(pos);
-            }
-        }
+        buildFloorLanding(world, landingY, blocks);
         stageBlocks.add(blocks);
         int finalCeiling = landingY + 5;
         fillCeiling(world, ceilingY, Blocks.AIR.getDefaultState());
         buildWalls(world, wallTopY + 1, finalCeiling);
-        fillCeiling(world, finalCeiling, Blocks.PRISMARINE_BRICKS.getDefaultState());
+        fillCeiling(world, finalCeiling, WHITEWASH.getDefaultState());
         wallTopY = finalCeiling;
         ceilingY = finalCeiling;
         hatch = new BlockPos(center.getX(), finalCeiling, center.getZ());
         set(world, hatch, Blocks.SPRUCE_TRAPDOOR.getDefaultState()
                 .with(TrapdoorBlock.HALF, BlockHalf.BOTTOM).with(TrapdoorBlock.OPEN, false));
         set(world, hatch.up(), Blocks.SEA_LANTERN.getDefaultState());
-        set(world, new BlockPos(center.getX() - 2, landingY + 2, center.getZ()),
-                Blocks.SOUL_WALL_TORCH.getDefaultState().with(WallTorchBlock.FACING, Direction.EAST));
+        setBulk(world, new BlockPos(center.getX(), landingY + 3, center.getZ() + 1), LAMP.getDefaultState());
     }
 }
