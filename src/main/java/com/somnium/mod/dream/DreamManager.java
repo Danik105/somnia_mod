@@ -23,7 +23,10 @@ import net.minecraft.item.ItemStack;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ChunkTicketType;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.util.math.ChunkPos;
+import java.util.Comparator;
 import net.minecraft.sound.SoundCategory;
 import net.minecraft.text.Text;
 import net.minecraft.text.TranslatableTextContent;
@@ -86,6 +89,15 @@ public final class DreamManager {
             this.enterTick = enterTick;
         }
     }
+
+    /**
+     * Пока игрок во сне, чанки вокруг кровати держатся загруженными. Иначе они выгружались,
+     * и при пробуждении мир грузился заново (долгий экран загрузки), а тело в кровати
+     * пропадало из виду сервера.
+     */
+    private static final ChunkTicketType<ChunkPos> RETURN_TICKET =
+            ChunkTicketType.create("somnium_return", Comparator.comparingLong(ChunkPos::toLong));
+    private static final int RETURN_TICKET_RADIUS = 3;
 
     private static final Map<UUID, Participant> PARTICIPANTS = new HashMap<>();
     private static final List<DreamSession> SESSIONS = new ArrayList<>();
@@ -208,6 +220,7 @@ public final class DreamManager {
         if (session == null) return false;
 
         DreamSnapshot snapshot = DreamSnapshot.capture(player, type.id(), bedPos);
+        holdReturnChunks(server, snapshot, true);
         SomniumPlayerState.of(player).setDreamSnapshot(snapshot.toNbt());
 
         long now = server.getTicks();
@@ -298,6 +311,7 @@ public final class DreamManager {
 
         leaveSession(participant, player);
         returnToReality(player, participant.snapshot);
+        holdReturnChunks(player.getServer(), participant.snapshot, false);
         SomniumPlayerState.of(player).setDreamSnapshot(null);
         removeSleepingBody(player.getServer(), participant);
         DreamHints.clear(player.getUuid());
@@ -360,6 +374,14 @@ public final class DreamManager {
         player.stopRiding();
         teleport(player, world, pos, snapshot.yaw, snapshot.pitch);
         snapshot.restore(player);
+    }
+
+    private static void holdReturnChunks(MinecraftServer server, DreamSnapshot snapshot, boolean hold) {
+        ServerWorld world = server.getWorld(snapshot.returnWorld);
+        if (world == null) return;
+        ChunkPos chunk = new ChunkPos(BlockPos.ofFloored(snapshot.returnPos));
+        if (hold) world.getChunkManager().addTicket(RETURN_TICKET, chunk, RETURN_TICKET_RADIUS, chunk);
+        else world.getChunkManager().removeTicket(RETURN_TICKET, chunk, RETURN_TICKET_RADIUS, chunk);
     }
 
     private static void teleport(ServerPlayerEntity player, ServerWorld world, Vec3d pos, float yaw, float pitch) {
@@ -541,6 +563,7 @@ public final class DreamManager {
         // Снимок яви остаётся в NBT игрока и будет восстановлен при следующем входе
         leaveSession(participant, player);
         removeSleepingBody(player.getServer(), participant);
+        holdReturnChunks(player.getServer(), participant.snapshot, false);
     }
 
     public static void onServerStopping() {

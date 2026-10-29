@@ -7,6 +7,7 @@ import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
+import com.somnium.mod.SomniumMod;
 import com.somnium.mod.dream.DreamManager;
 import com.somnium.mod.dream.DreamOutcome;
 import com.somnium.mod.dream.DreamRegistry;
@@ -93,6 +94,10 @@ public final class SomniumCommands {
             throws CommandSyntaxException {
         Identifier id = IdentifierArgumentType.getIdentifier(ctx, "dream");
         DreamType type = DreamRegistry.get(id);
+        // "/testdream elevator" читается как minecraft:elevator, а сны лежат в somnium:
+        if (type == null && id.getNamespace().equals(Identifier.DEFAULT_NAMESPACE)) {
+            type = DreamRegistry.get(SomniumMod.id(id.getPath()));
+        }
         if (type == null) throw UNKNOWN_DREAM.create(id);
         int started = 0;
         for (ServerPlayerEntity player : targets) {
@@ -103,8 +108,9 @@ public final class SomniumCommands {
             if (DreamManager.enterDream(player, type, null)) started++;
         }
         int count = started;
+        String dreamName = type.nameKey();
         ctx.getSource().sendFeedback(() -> Text.translatable("somnium.command.dream_started",
-                Text.translatable(type.nameKey()), count).formatted(Formatting.GREEN), true);
+                Text.translatable(dreamName), count).formatted(Formatting.GREEN), true);
         return count;
     }
 
