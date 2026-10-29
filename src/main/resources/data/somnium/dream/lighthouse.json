@@ -1,0 +1,12 @@
+{
+  "name": "somnium.dream.lighthouse",
+  "objective": "somnium.dream.lighthouse.objective",
+  "dimension": "somnium:dream_lighthouse",
+  "scenario": "somnium:lighthouse",
+  "monsters": [
+    "somnium:drowned_wretch"
+  ],
+  "weight": 12,
+  "max_sanity": 100,
+  "duration_ticks": 6000
+}

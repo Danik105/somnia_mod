@@ -26,6 +26,16 @@ public final class DreamScenarios {
         register("elevator", ElevatorScenario::new);
         register("night_train", NightTrainScenario::new);
         register("backrooms", BackroomsScenario::new);
+        register("school", SchoolScenario::new);
+        register("hospital", HospitalScenario::new);
+        register("fairground", FairgroundScenario::new);
+        register("frozen_lake", FrozenLakeScenario::new);
+        register("library", LibraryScenario::new);
+        register("cornfield", CornfieldScenario::new);
+        register("endless_fall", EndlessFallScenario::new);
+        register("theater", TheaterScenario::new);
+        register("lighthouse", LighthouseScenario::new);
+        register("basement", BasementScenario::new);
     }
 
     private DreamScenarios() {}

@@ -1,0 +1,12 @@
+{
+  "name": "somnium.dream.frozen_lake",
+  "objective": "somnium.dream.frozen_lake.objective",
+  "dimension": "somnium:dream_frozen_lake",
+  "scenario": "somnium:frozen_lake",
+  "monsters": [
+    "somnium:drowned_wretch"
+  ],
+  "weight": 12,
+  "max_sanity": 100,
+  "duration_ticks": 4800
+}

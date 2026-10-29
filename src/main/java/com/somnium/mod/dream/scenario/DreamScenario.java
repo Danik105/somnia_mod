@@ -1,6 +1,9 @@
 package com.somnium.mod.dream.scenario;
 
+import com.somnium.mod.dream.DreamManager;
+import com.somnium.mod.dream.DreamOutcome;
 import com.somnium.mod.dream.DreamSession;
+import com.somnium.mod.registry.ModSounds;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.DoorBlock;
@@ -10,8 +13,10 @@ import net.minecraft.block.enums.DoubleBlockHalf;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.item.ItemStack;
+import net.minecraft.particle.ParticleTypes;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.sound.SoundCategory;
 import net.minecraft.text.MutableText;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
@@ -119,6 +124,23 @@ public abstract class DreamScenario {
 
     protected static void setBulk(ServerWorld world, BlockPos pos, BlockState state) {
         world.setBlockState(pos, state, BULK);
+    }
+
+    /** Заливает параллелепипед от a до b включительно (без обновлений соседей). */
+    protected static void fill(ServerWorld world, BlockPos a, BlockPos b, BlockState state) {
+        for (BlockPos pos : BlockPos.iterate(a, b)) world.setBlockState(pos, state, BULK);
+    }
+
+    /** Игрок дошёл до точки выхода (ближе √distSq) — будим его с наградой за цель. */
+    protected static boolean reachedExit(DreamSession session, ServerPlayerEntity player, BlockPos exit, double distSq) {
+        if (exit == null || player.squaredDistanceTo(exit.toCenterPos()) > distSq) return false;
+        if (!DreamManager.requestWake(player, DreamOutcome.SURVIVED_OBJECTIVE)) {
+            return false;
+        }
+        player.playSound(ModSounds.EXIT_PORTAL, SoundCategory.PLAYERS, 1.0f, 1.0f);
+        session.world.spawnParticles(ParticleTypes.END_ROD, player.getX(), player.getY() + 1, player.getZ(),
+                30, 0.5, 1, 0.5, 0.05);
+        return true;
     }
 
     /** Вощёная табличка с текстом (до 4 строк): её нельзя редактировать. */

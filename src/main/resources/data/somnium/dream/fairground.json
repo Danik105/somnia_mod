@@ -1,0 +1,12 @@
+{
+  "name": "somnium.dream.fairground",
+  "objective": "somnium.dream.fairground.objective",
+  "dimension": "somnium:dream_fairground",
+  "scenario": "somnium:fairground",
+  "monsters": [
+    "somnium:feral_villager"
+  ],
+  "weight": 12,
+  "max_sanity": 100,
+  "duration_ticks": 6000
+}

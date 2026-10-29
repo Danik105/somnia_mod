@@ -1,0 +1,10 @@
+{
+  "name": "somnium.dream.theater",
+  "objective": "somnium.dream.theater.objective",
+  "dimension": "somnium:dream_theater",
+  "scenario": "somnium:theater",
+  "monsters": [],
+  "weight": 10,
+  "max_sanity": 70,
+  "duration_ticks": 4800
+}

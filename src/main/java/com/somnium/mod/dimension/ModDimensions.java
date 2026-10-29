@@ -29,6 +29,16 @@ public final class ModDimensions {
     public static final RegistryKey<World> ELEVATOR = key("dream_elevator");
     public static final RegistryKey<World> NIGHT_TRAIN = key("dream_night_train");
     public static final RegistryKey<World> BACKROOMS = key("dream_backrooms");
+    public static final RegistryKey<World> SCHOOL = key("dream_school");
+    public static final RegistryKey<World> HOSPITAL = key("dream_hospital");
+    public static final RegistryKey<World> FAIRGROUND = key("dream_fairground");
+    public static final RegistryKey<World> FROZEN_LAKE = key("dream_frozen_lake");
+    public static final RegistryKey<World> LIBRARY = key("dream_library");
+    public static final RegistryKey<World> CORNFIELD = key("dream_cornfield");
+    public static final RegistryKey<World> ENDLESS_FALL = key("dream_endless_fall");
+    public static final RegistryKey<World> THEATER = key("dream_theater");
+    public static final RegistryKey<World> LIGHTHOUSE = key("dream_lighthouse");
+    public static final RegistryKey<World> BASEMENT = key("dream_basement");
     public static final RegistryKey<World> DREAM_PORTAL_WORLD = key("dream_portal_world");
 
     private static RegistryKey<World> key(String path) {

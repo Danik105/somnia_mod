@@ -1,0 +1,12 @@
+{
+  "name": "somnium.dream.school",
+  "objective": "somnium.dream.school.objective",
+  "dimension": "somnium:dream_school",
+  "scenario": "somnium:school",
+  "monsters": [
+    "somnium:stalker"
+  ],
+  "weight": 12,
+  "max_sanity": 100,
+  "duration_ticks": 6000
+}

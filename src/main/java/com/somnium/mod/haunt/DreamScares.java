@@ -165,6 +165,45 @@ public final class DreamScares {
                 sound(SoundEvents.BLOCK_GRINDSTONE_USE, 10, 1.0f, 0.4f),
                 event("laughter"), event("whisper")));
         BY_SCENARIO.put("backrooms", List.of(event("footsteps"), event("far_scream"), event("breathing")));
+        BY_SCENARIO.put("school", List.of(
+                sound(SoundEvents.BLOCK_WOODEN_DOOR_CLOSE, 12, 1.2f, 0.7f),
+                sound(SoundEvents.ENTITY_VILLAGER_AMBIENT, 16, 0.8f, 1.6f), // детский голос из класса
+                event("footsteps"), event("laughter"), event("name_call")));
+        BY_SCENARIO.put("hospital", List.of(
+                sound(SoundEvents.BLOCK_IRON_DOOR_CLOSE, 14, 1.0f, 0.6f),
+                sound(SoundEvents.ENTITY_ZOMBIE_VILLAGER_AMBIENT, 10, 0.9f, 0.6f),
+                event("breathing"), event("heartbeat"), event("whisper")));
+        BY_SCENARIO.put("fairground", List.of(
+                sound(SoundEvents.ENTITY_WITCH_CELEBRATE, 14, 1.0f, 0.5f),
+                sound(SoundEvents.BLOCK_NOTE_BLOCK_BELL.value(), 20, 1.0f, 0.5f),
+                event("laughter"), event("stranger"), THIN));
+        BY_SCENARIO.put("frozen_lake", List.of(
+                sound(SoundEvents.BLOCK_GLASS_BREAK, 20, 1.5f, 0.4f),
+                (session, player, random) -> Horror.sound(player, SoundEvents.BLOCK_GLASS_HIT, player.getPos().add(0, -1.5, 0), 1.5f, 0.5f),
+                event("whisper"), event("name_call")));
+        BY_SCENARIO.put("library", List.of(
+                sound(SoundEvents.ITEM_BOOK_PUT, 6, 1.0f, 0.6f),
+                sound(SoundEvents.BLOCK_WOOD_STEP, 8, 0.8f, 0.5f),
+                event("whisper"), event("breathing")));
+        BY_SCENARIO.put("cornfield", List.of(
+                sound(SoundEvents.BLOCK_GRASS_BREAK, 6, 1.0f, 0.6f),
+                sound(SoundEvents.ENTITY_PARROT_IMITATE_PHANTOM, 18, 1.0f, 0.5f),
+                event("footsteps"), event("stranger"), THIN));
+        BY_SCENARIO.put("endless_fall", List.of(
+                sound(SoundEvents.ENTITY_PHANTOM_SWOOP, 6, 1.0f, 0.6f),
+                event("name_call"), event("heartbeat")));
+        BY_SCENARIO.put("theater", List.of(
+                sound(SoundEvents.ENTITY_ITEM_FRAME_PLACE, 14, 1.0f, 1.4f), // одинокий хлопок в зале
+                sound(SoundEvents.BLOCK_WOODEN_TRAPDOOR_CLOSE, 12, 1.0f, 0.6f),
+                event("laughter"), event("whisper"), event("eyes_in_dark")));
+        BY_SCENARIO.put("lighthouse", List.of(
+                sound(SoundEvents.ENTITY_LIGHTNING_BOLT_THUNDER, 40, 2.0f, 0.7f),
+                sound(SoundEvents.ENTITY_DROWNED_AMBIENT, 12, 1.0f, 0.6f),
+                event("knock"), event("name_call")));
+        BY_SCENARIO.put("basement", List.of(
+                sound(SoundEvents.BLOCK_CHAIN_STEP, 6, 1.0f, 0.5f),
+                sound(SoundEvents.ENTITY_SPIDER_AMBIENT, 8, 0.8f, 0.5f),
+                event("breathing"), event("eyes_in_dark"), event("digging")));
     }
 
     /** Вызывается раз в тик для каждой сессии сна. */
