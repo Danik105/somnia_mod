@@ -9,6 +9,11 @@ import com.mojang.brigadier.exceptions.DynamicCommandExceptionType;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import com.somnium.mod.SomniumMod;
 import com.somnium.mod.dream.DreamManager;
+import com.somnium.mod.haunt.SleepParalysis;
+import net.minecraft.block.BedBlock;
+import net.minecraft.block.BlockState;
+import net.minecraft.block.enums.BedPart;
+import net.minecraft.util.math.BlockPos;
 import com.somnium.mod.dream.DreamOutcome;
 import com.somnium.mod.dream.DreamRegistry;
 import com.somnium.mod.dream.DreamSession;
@@ -61,7 +66,15 @@ public final class SomniumCommands {
                         .then(argument("targets", EntityArgumentType.players())
                                 .executes(ctx -> wake(ctx, EntityArgumentType.getPlayers(ctx, "targets")))))
                 .then(sanityNode())
-                .then(literal("sessions").executes(SomniumCommands::sessions)));
+                .then(literal("sessions").executes(SomniumCommands::sessions))
+                .then(literal("paralysis")
+                        .executes(ctx -> paralysis(ctx, List.of(ctx.getSource().getPlayerOrThrow())))
+                        .then(argument("targets", EntityArgumentType.players())
+                                .executes(ctx -> paralysis(ctx, EntityArgumentType.getPlayers(ctx, "targets"))))));
+        dispatcher.register(literal("paralysis").requires(src -> src.hasPermissionLevel(2))
+                .executes(ctx -> paralysis(ctx, List.of(ctx.getSource().getPlayerOrThrow())))
+                .then(argument("targets", EntityArgumentType.players())
+                        .executes(ctx -> paralysis(ctx, EntityArgumentType.getPlayers(ctx, "targets")))));
 
         dispatcher.register(dreamNode("testdream").requires(src -> src.hasPermissionLevel(2)));
         dispatcher.register(sanityNode().requires(src -> src.hasPermissionLevel(2)));
@@ -142,6 +155,47 @@ public final class SomniumCommands {
                     String.format("%.1f", now)).formatted(Formatting.GREEN), true);
         }
         return targets.size();
+    }
+
+    /**
+     * Сонный паралич со 100% шансом. Лежит в кровати — начинается сразу. Кровать рядом
+     * (в 6 блоках) — игрока укладывает в неё. Иначе паралич случится, когда он ляжет сам.
+     */
+    private static int paralysis(CommandContext<ServerCommandSource> ctx, Collection<ServerPlayerEntity> targets) {
+        int started = 0;
+        for (ServerPlayerEntity player : targets) {
+            if (DreamManager.isDreaming(player.getUuid())) {
+                ctx.getSource().sendError(Text.translatable("somnium.command.already_dreaming", player.getName()));
+                continue;
+            }
+            if (!player.isSleeping()) {
+                BlockPos bed = findBed(player);
+                if (bed != null) player.sleep(bed);
+            }
+            if (player.isSleeping() && SleepParalysis.start(player)) {
+                started++;
+            } else {
+                SleepParalysis.forceNext(player);
+                ctx.getSource().sendFeedback(() -> Text.translatable("somnium.command.paralysis_next", player.getName())
+                        .formatted(Formatting.GRAY), false);
+            }
+        }
+        int count = started;
+        if (count > 0) {
+            ctx.getSource().sendFeedback(() -> Text.translatable("somnium.command.paralysis", count).formatted(Formatting.GREEN), true);
+        }
+        return count;
+    }
+
+    @org.jetbrains.annotations.Nullable
+    private static BlockPos findBed(ServerPlayerEntity player) {
+        for (BlockPos pos : BlockPos.iterateOutwards(player.getBlockPos(), 6, 3, 6)) {
+            BlockState state = player.getWorld().getBlockState(pos);
+            if (state.getBlock() instanceof BedBlock && state.get(BedBlock.PART) == BedPart.HEAD && !state.get(BedBlock.OCCUPIED)) {
+                return pos.toImmutable();
+            }
+        }
+        return null;
     }
 
     private static int sessions(CommandContext<ServerCommandSource> ctx) {

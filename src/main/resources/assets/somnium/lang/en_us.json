@@ -220,5 +220,12 @@
   "somnium.event.title.3": "TURN AROUND",
   "somnium.event.title.4": "WAKE UP",
   "somnium.event.title.5": "ARE YOU ALONE?",
-  "somnium.event.title.6": "RUN"
+  "somnium.event.title.6": "RUN",
+  "entity.somnium.grasping_hands": "Hands Under the Bed",
+  "somnium.paralysis.start": "You wake in the middle of the night. Your body won't move.",
+  "somnium.paralysis.cant_move": "You can't move...",
+  "somnium.paralysis.morning": "Morning",
+  "somnium.paralysis.morning_sub": "...it was just a dream, wasn't it?",
+  "somnium.command.paralysis": "Sleep paralysis started for %s player(s)",
+  "somnium.command.paralysis_next": "%s isn't in bed. The paralysis will start when they lie down."
 }

@@ -46,6 +46,7 @@ public final class SomniumEvents {
             DreamManager.tick(server);
             DreamPortalManager.tick(server);
             com.somnium.mod.haunt.Horror.tick(server);
+            com.somnium.mod.haunt.SleepParalysis.tick(server);
         });
         ServerLifecycleEvents.SERVER_STARTED.register(DreamSlots::resumeCleanup);
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
@@ -60,6 +61,7 @@ public final class SomniumEvents {
             DreamPortalManager.onDisconnect(handler.player.getUuid());
             BleedThroughManager.onDisconnect(handler.player.getUuid());
             com.somnium.mod.haunt.HauntManager.onDisconnect(handler.player.getUuid());
+            com.somnium.mod.haunt.SleepParalysis.onDisconnect(handler.player.getUuid());
         });
         ServerPlayerEvents.COPY_FROM.register((oldPlayer, newPlayer, alive) ->
                 SomniumPlayerState.of(newPlayer).copyFrom(SomniumPlayerState.of(oldPlayer)));

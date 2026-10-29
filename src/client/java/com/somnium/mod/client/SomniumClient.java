@@ -72,6 +72,7 @@ public final class SomniumClient implements ClientModInitializer {
         EntityRendererRegistry.register(ModEntities.THIN_MAN, ThinManRenderer::new);
         EntityRendererRegistry.register(ModEntities.CRAWLER, CrawlerRenderer::new);
         EntityRendererRegistry.register(ModEntities.SMILER, SmilerRenderer::new);
+        EntityRendererRegistry.register(ModEntities.GRASPING_HANDS, GraspingHandsRenderer::new);
         HorrorOverlay.register();
         EntityRendererRegistry.register(ModEntities.SLEEPING_BODY, SleepingBodyRenderer::new);
 

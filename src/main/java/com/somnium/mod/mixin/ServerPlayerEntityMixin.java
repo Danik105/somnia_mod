@@ -1,6 +1,7 @@
 package com.somnium.mod.mixin;
 
 import com.somnium.mod.dream.DreamManager;
+import com.somnium.mod.haunt.SleepParalysis;
 import com.somnium.mod.player.SomniumPlayerAccess;
 import com.somnium.mod.player.SomniumPlayerState;
 import net.minecraft.entity.damage.DamageSource;
@@ -27,6 +28,12 @@ public abstract class ServerPlayerEntityMixin implements SomniumPlayerAccess {
     @Override
     public SomniumPlayerState somnium$getState() {
         return somnium$state;
+    }
+
+    /** Во время сонного паралича встать нельзя: ни кнопкой, ни днём, ни ванильным пропуском ночи. */
+    @Inject(method = "wakeUp(ZZ)V", at = @At("HEAD"), cancellable = true)
+    private void somnium$holdInBed(boolean skipSleepTimer, boolean updateSleepingPlayers, CallbackInfo ci) {
+        if (SleepParalysis.isActive(((ServerPlayerEntity) (Object) this).getUuid())) ci.cancel();
     }
 
     @Inject(method = "writeCustomDataToNbt", at = @At("TAIL"))

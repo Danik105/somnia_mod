@@ -44,6 +44,7 @@ public class ThinManEntity extends AbstractNightmareEntity {
     private int watchedTicks;
     private long nextStep;
     private int glimpseTicks = -1;
+    private boolean puppet;
     private long hauntSince;
 
     public ThinManEntity(EntityType<? extends HostileEntity> type, World world) {
@@ -69,6 +70,11 @@ public class ThinManEntity extends AbstractNightmareEntity {
         this.nextStep = hauntSince + 200;
     }
 
+    /** Кукла для катсцен: стоит и смотрит, двигает её сцена. */
+    public void puppet() {
+        this.puppet = true;
+    }
+
     public void glimpse(int ticks) {
         this.glimpseTicks = ticks;
     }
@@ -85,6 +91,10 @@ public class ThinManEntity extends AbstractNightmareEntity {
         this.setVelocity(0, Math.min(0, this.getVelocity().y), 0);
 
         ServerPlayerEntity nearest = world.getClosestPlayer(this, 64) instanceof ServerPlayerEntity sp ? sp : null;
+        if (puppet) {
+            if (this.age > 600) this.discard();
+            return;
+        }
         if (glimpseTicks >= 0) {
             if (nearest != null) Horror.face(this, nearest.getEyePos());
             if (--glimpseTicks <= 0 || (nearest != null && Horror.isLookingAt(nearest, this, WATCH_DOT) && ++watchedTicks > 15)) {
@@ -174,6 +184,7 @@ public class ThinManEntity extends AbstractNightmareEntity {
     @Override
     public boolean damage(DamageSource source, float amount) {
         if (source.isOf(DamageTypes.OUT_OF_WORLD) || source.isOf(DamageTypes.GENERIC_KILL)) return super.damage(source, amount);
+        if (puppet) return false;
         if (this.getWorld() instanceof ServerWorld world && source.getAttacker() instanceof ServerPlayerEntity player) {
             SanityManager.add(player, -2.0f);
             Horror.sound(player, SoundEvents.ENTITY_ENDERMAN_TELEPORT, this.getPos(), 1.5f, 0.4f);

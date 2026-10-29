@@ -220,5 +220,12 @@
   "somnium.event.title.3": "ОБЕРНИСЬ",
   "somnium.event.title.4": "ПРОСНИСЬ",
   "somnium.event.title.5": "ТЫ ОДИН?",
-  "somnium.event.title.6": "БЕГИ"
+  "somnium.event.title.6": "БЕГИ",
+  "entity.somnium.grasping_hands": "Руки из-под кровати",
+  "somnium.paralysis.start": "Ты проснулся посреди ночи. Тело не слушается.",
+  "somnium.paralysis.cant_move": "Ты не можешь пошевелиться...",
+  "somnium.paralysis.morning": "Утро",
+  "somnium.paralysis.morning_sub": "...это ведь был просто сон?",
+  "somnium.command.paralysis": "Сонный паралич начался у игроков: %s",
+  "somnium.command.paralysis_next": "%s не в кровати. Паралич начнётся, когда он ляжет спать."
 }

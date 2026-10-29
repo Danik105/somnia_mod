@@ -6,6 +6,7 @@ import com.somnium.mod.dimension.ModDimensions;
 import com.somnium.mod.dream.scenario.DreamScenario;
 import com.somnium.mod.dream.scenario.DreamScenarios;
 import com.somnium.mod.entity.SleepingBodyEntity;
+import com.somnium.mod.haunt.SleepParalysis;
 import com.somnium.mod.network.DreamHudPayload;
 import com.somnium.mod.player.SomniumPlayerState;
 import com.somnium.mod.registry.ModEntities;
@@ -154,6 +155,7 @@ public final class DreamManager {
     /** Игрок успешно лёг в кровать (PlayerEntityMixin). */
     public static void onPlayerSlept(ServerPlayerEntity player) {
         if (DreamRegistry.isEmpty() || isDreaming(player.getUuid())) return;
+        if (SleepParalysis.isActive(player.getUuid())) return;
         if (ModDimensions.isDreamDimension(player.getWorld().getRegistryKey())) return;
         PENDING_SLEEP.put(player.getUuid(), player.getServer().getTicks() + SLEEP_TRANSITION_TICKS);
     }
@@ -170,6 +172,8 @@ public final class DreamManager {
             if (player != null && player.isSleeping() && player.isAlive()) ready.add(player);
         }
         for (ServerPlayerEntity player : ready) {
+            // Вместо сна иногда сонный паралич: игрок так и остаётся лежать в кровати
+            if (SleepParalysis.roll(player) && SleepParalysis.start(player)) continue;
             DreamSession joinable = findJoinableSession(player);
             if (joinable != null) {
                 enterDream(player, joinable.type, joinable);
