@@ -627,9 +627,18 @@ public final class BackroomsScenario extends DreamScenario {
     public void tick(DreamSession session) {
         ServerWorld world = session.world;
         long now = session.now();
-        if (now % 80 == 0) {
-            session.sound(exit0, ModSounds.EXIT_PORTAL, SoundCategory.AMBIENT, 4.0f, 0.7f);
-            session.sound(exit1, ModSounds.EXIT_PORTAL, SoundCategory.AMBIENT, 4.0f, 0.9f);
+        // Звон выхода: раз в 12 секунд, каждому только дверь его уровня, тише издалека
+        if (now % 240 == 0) {
+            for (ServerPlayerEntity player : session.players()) {
+                boolean deep = onLevel1.contains(player.getUuid());
+                BlockPos exit = deep ? exit1 : exit0;
+                if (exit == null) continue;
+                double dist = Math.sqrt(player.getBlockPos().getSquaredDistance(exit));
+                if (dist > 60) continue;
+                float volume = (float) Math.max(0.15, 1.0 - dist / 60.0);
+                DreamFx.soundTo(player, ModSounds.EXIT_PORTAL, SoundCategory.AMBIENT,
+                        exit.getX() + 0.5, exit.getY() + 1, exit.getZ() + 0.5, volume, deep ? 0.9f : 0.7f);
+            }
         }
 
         if (!blackout && now >= nextBlackout) {
@@ -713,10 +722,10 @@ public final class BackroomsScenario extends DreamScenario {
     public void tickPlayer(DreamSession session, ServerPlayerEntity player) {
         long now = session.now();
         boolean deep = onLevel1.contains(player.getUuid());
-        if (now % 40 == 0) {
-            // Гул ламп наверху, гул труб внизу
-            if (deep) player.playSound(SoundEvents.BLOCK_PORTAL_AMBIENT, SoundCategory.AMBIENT, 0.15f, 0.5f);
-            else player.playSound(SoundEvents.BLOCK_BEACON_AMBIENT, SoundCategory.AMBIENT, 0.35f, 0.6f);
+        if (now % 160 == 0) {
+            // Гул ламп наверху, гул труб внизу: редко и тихо, чтобы не сливался в один звук
+            if (deep) player.playSound(SoundEvents.BLOCK_PORTAL_AMBIENT, SoundCategory.AMBIENT, 0.1f, 0.5f);
+            else player.playSound(SoundEvents.BLOCK_BEACON_AMBIENT, SoundCategory.AMBIENT, 0.2f, 0.55f + session.random.nextFloat() * 0.1f);
         }
         if (!deep && exit0 != null && player.squaredDistanceTo(exit0.toCenterPos()) < 1.2) {
             descend(session, player);

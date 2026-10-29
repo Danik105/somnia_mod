@@ -110,7 +110,13 @@ public final class DreamSlots {
     public static void tick() {
         CleanupJob job = JOBS.peek();
         if (job == null) return;
-        if (job.step()) JOBS.poll();
+        try {
+            if (job.step()) JOBS.poll();
+        } catch (RuntimeException e) {
+            // Зачистка не должна ронять сервер: бросаем участок, он останется грязным и не будет выдан снова
+            SomniumMod.LOGGER.error("[Somnium] Не удалось дочистить участок сна {}", job.slot, e);
+            JOBS.poll();
+        }
     }
 
     private static void discardEntities(ServerWorld world, BlockBox box) {
@@ -185,7 +191,9 @@ public final class DreamSlots {
 
         private BlockState expectedAt(int blockY) {
             int index = blockY - bottomY;
-            return index >= 0 && index < layers.size() ? layers.get(index) : Blocks.AIR.getDefaultState();
+            // Слой воздуха плоский генератор хранит как null
+            BlockState state = index >= 0 && index < layers.size() ? layers.get(index) : null;
+            return state != null ? state : Blocks.AIR.getDefaultState();
         }
 
         private void finish() {
