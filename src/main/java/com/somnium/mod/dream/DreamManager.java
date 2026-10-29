@@ -160,6 +160,11 @@ public final class DreamManager {
         PENDING_SLEEP.put(player.getUuid(), player.getServer().getTicks() + SLEEP_TRANSITION_TICKS);
     }
 
+    /** Отменить отложенное засыпание (начался сонный паралич). */
+    public static void cancelPendingSleep(UUID playerId) {
+        PENDING_SLEEP.remove(playerId);
+    }
+
     private static void processPendingSleeps(MinecraftServer server, long now) {
         if (PENDING_SLEEP.isEmpty()) return;
         Iterator<Map.Entry<UUID, Long>> it = PENDING_SLEEP.entrySet().iterator();
@@ -169,7 +174,8 @@ public final class DreamManager {
             if (now < entry.getValue()) continue;
             it.remove();
             ServerPlayerEntity player = server.getPlayerManager().getPlayer(entry.getKey());
-            if (player != null && player.isSleeping() && player.isAlive()) ready.add(player);
+            if (player != null && player.isSleeping() && player.isAlive()
+                    && !SleepParalysis.isActive(player.getUuid())) ready.add(player);
         }
         for (ServerPlayerEntity player : ready) {
             // Вместо сна иногда сонный паралич: игрок так и остаётся лежать в кровати
@@ -468,6 +474,7 @@ public final class DreamManager {
         DreamScenario scenario = session.scenario;
         try {
             scenario.tick(session);
+            com.somnium.mod.haunt.DreamScares.tick(session);
             for (ServerPlayerEntity player : session.players()) {
                 if (isWakePending(player.getUuid())) continue;
                 enforceBoundary(session, player);

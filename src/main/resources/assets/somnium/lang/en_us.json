@@ -35,7 +35,7 @@
   "somnium.dream.mirror_wastes": "Dream: The Mirror Wastes",
   "somnium.dream.mirror_wastes.objective": "Catch your reflection by touching the fleeing mirror 3 times. Your Double follows you and gets faster after every touch.",
   "somnium.dream.collapsing_mine": "Dream: The Collapsing Mine",
-  "somnium.dream.collapsing_mine.objective": "Find the door out of the maze. The Exit Compass points to it. Tunnels cave in and grow back behind you.",
+  "somnium.dream.collapsing_mine.objective": "Find the door out of the maze. The Exit Compass points to it. The mine helps you: sometimes a wall behind you collapses and opens a shorter way.",
   "somnium.dream.crimson_feast": "Dream: The Crimson Feast",
   "somnium.dream.crimson_feast.objective": "The judges will serve 5 dishes. Eat the fresh ones. Burn the spoiled ones (green name, smoke): dish in one hand, lighter in the other, right-click. Then drink the Toast Goblet.",
   "somnium.dream.void_of_eyes": "Dream: The Void of Eyes",
@@ -227,5 +227,12 @@
   "somnium.paralysis.morning": "Morning",
   "somnium.paralysis.morning_sub": "...it was just a dream, wasn't it?",
   "somnium.command.paralysis": "Sleep paralysis started for %s player(s)",
-  "somnium.command.paralysis_next": "%s isn't in bed. The paralysis will start when they lie down."
+  "somnium.command.paralysis_next": "%s isn't in bed. The paralysis will start when they lie down.",
+  "somnium.hint.mine.shortcut": "A wall crumbled behind you. There's a passage there, closer to the exit.",
+  "somnium.scare.mirror": "THAT'S NOT YOU",
+  "somnium.scare.feast": "EAT",
+  "somnium.scare.eyes": "THEY ARE WATCHING",
+  "somnium.scare.train.station.1": "\"Next stop is the last stop. This train goes no further. Ever.\"",
+  "somnium.scare.train.station.2": "\"Dear passengers, do not leave sleepers unattended.\"",
+  "somnium.scare.train.station.3": "\"Station... station... station...\""
 }

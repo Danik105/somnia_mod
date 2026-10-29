@@ -1,7 +1,6 @@
 package com.somnium.mod.dream.scenario;
 
 import com.somnium.mod.SomniumMod;
-import com.somnium.mod.dream.DreamFx;
 import com.somnium.mod.dream.DreamHints;
 import com.somnium.mod.dream.DreamManager;
 import com.somnium.mod.dream.DreamOutcome;
@@ -10,7 +9,6 @@ import com.somnium.mod.registry.ModSounds;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.WallTorchBlock;
-import net.minecraft.entity.effect.StatusEffects;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.nbt.NbtCompound;
@@ -25,28 +23,29 @@ import net.minecraft.util.math.BlockBox;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Direction;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.Random;
 
 /**
- * Обрушающаяся шахта: процедурный лабиринт 20×20 ячеек. Выход — дверь в самой дальней
- * ячейке, Компас Выхода указывает на неё. Каждые 5 секунд за спиной игрока одна стена
- * обрушается (новый короткий путь), другая зарастает — исходный путь к двери остаётся всегда.
+ * Шахта-лабиринт: процедурный лабиринт 20×20 ячеек. Выход — дверь в самой дальней ячейке,
+ * Компас выхода указывает на неё. Шахта помогает тому, кто идёт: раз в 15 секунд за спиной
+ * игрока (вне поля зрения) обрушается та стена, которая сильнее всего сокращает путь к двери.
+ * Новый проход остаётся навсегда и отмечен фонарём душ.
  */
 public final class CollapsingMineScenario extends DreamScenario {
 
     private static final int MAZE_CELLS = 20;
     private static final int CELL_SIZE = 3;
     private static final int WALL_HEIGHT = 4;
-    private static final int SHIFT_INTERVAL = 100;
-    private static final int SHIFT_RADIUS = 8;
-    private static final int MAX_OPEN_PASSAGES = 6;
+    private static final int SHIFT_INTERVAL = 300;
+    private static final int SHIFT_RADIUS = 5;
+    private static final int MIN_GAIN = 6;
 
     private MazeGenerator maze;
     private BlockPos mazeOrigin;
     private BlockPos door;
-    private final List<BlockPos> opened = new ArrayList<>();
+    private final java.util.Set<Long> opened = new java.util.HashSet<>();
+    private int exitGx;
+    private int exitGz;
     private long nextShift;
     private long nextScream;
 
@@ -63,6 +62,8 @@ public final class CollapsingMineScenario extends DreamScenario {
         BlockPos spawn = maze.findSpawnPosition(mazeOrigin, 0);
         door = maze.findExitPosition(spawn, mazeOrigin, 0);
         WakeDoor.build(session, door);
+        exitGx = Math.floorDiv(door.getX() - mazeOrigin.getX(), CELL_SIZE);
+        exitGz = Math.floorDiv(door.getZ() - mazeOrigin.getZ(), CELL_SIZE);
 
         for (Identifier id : session.type.monsters()) {
             for (BlockPos pos : maze.findMonsterSpawnPositions(mazeOrigin, 0, 4)) {
@@ -98,11 +99,6 @@ public final class CollapsingMineScenario extends DreamScenario {
     }
 
     @Override
-    public void applyEffects(ServerPlayerEntity player, int duration) {
-        DreamFx.effect(player, StatusEffects.BLINDNESS, duration, 0);
-    }
-
-    @Override
     public void onJoin(DreamSession session, ServerPlayerEntity player, boolean leader) {
         giveCompass(player, session);
         DreamHints.show(player, tr("somnium.hint.mine.compass").formatted(Formatting.AQUA), 9);
@@ -119,8 +115,7 @@ public final class CollapsingMineScenario extends DreamScenario {
         }
         if (now >= nextShift) {
             nextShift = now + SHIFT_INTERVAL;
-            ServerPlayerEntity player = session.randomPlayer();
-            if (player != null) shiftWalls(session, player);
+            for (ServerPlayerEntity player : session.players()) openShortcut(session, player);
         }
     }
 
@@ -194,8 +189,41 @@ public final class CollapsingMineScenario extends DreamScenario {
         }
     }
 
-    /** Одна стена за спиной игрока обрушается, один из ранее открытых проходов зарастает. */
-    private void shiftWalls(DreamSession session, ServerPlayerEntity player) {
+    private boolean wall(int gx, int gz) {
+        return maze.isWall(gx, gz) && !opened.contains(key(gx, gz));
+    }
+
+    private static long key(int gx, int gz) {
+        return ((long) gx << 32) | (gz & 0xffffffffL);
+    }
+
+    /** Расстояние (в клетках сетки) от каждой клетки до двери по открытым проходам. */
+    private int[][] distances() {
+        int grid = MAZE_CELLS * 2 + 1;
+        int[][] dist = new int[grid][grid];
+        for (int[] row : dist) java.util.Arrays.fill(row, Integer.MAX_VALUE);
+        java.util.ArrayDeque<int[]> queue = new java.util.ArrayDeque<>();
+        dist[exitGx][exitGz] = 0;
+        queue.add(new int[]{exitGx, exitGz});
+        while (!queue.isEmpty()) {
+            int[] cur = queue.poll();
+            for (Direction dir : Direction.Type.HORIZONTAL) {
+                int nx = cur[0] + dir.getOffsetX();
+                int nz = cur[1] + dir.getOffsetZ();
+                if (nx < 0 || nz < 0 || nx >= grid || nz >= grid || wall(nx, nz)) continue;
+                if (dist[nx][nz] != Integer.MAX_VALUE) continue;
+                dist[nx][nz] = dist[cur[0]][cur[1]] + 1;
+                queue.add(new int[]{nx, nz});
+            }
+        }
+        return dist;
+    }
+
+    /**
+     * Стена рядом с игроком, за спиной, разделяющая два прохода: открыть ту, что даёт самый
+     * большой выигрыш пути к двери с той стороны, где сейчас игрок.
+     */
+    private void openShortcut(DreamSession session, ServerPlayerEntity player) {
         ServerWorld world = session.world;
         int grid = MAZE_CELLS * 2 + 1;
         double yawRad = Math.toRadians(player.getYaw());
@@ -203,56 +231,54 @@ public final class CollapsingMineScenario extends DreamScenario {
         double lookZ = Math.cos(yawRad);
         int pgx = Math.floorDiv(player.getBlockX() - mazeOrigin.getX(), CELL_SIZE);
         int pgz = Math.floorDiv(player.getBlockZ() - mazeOrigin.getZ(), CELL_SIZE);
+        int[][] dist = distances();
+        if (pgx < 0 || pgz < 0 || pgx >= grid || pgz >= grid || dist[pgx][pgz] == Integer.MAX_VALUE) return;
+        int here = dist[pgx][pgz];
 
-        List<int[]> candidates = new ArrayList<>();
+        int bestGain = MIN_GAIN - 1;
+        int[] best = null;
         for (int gx = Math.max(1, pgx - SHIFT_RADIUS); gx <= Math.min(grid - 2, pgx + SHIFT_RADIUS); gx++) {
             for (int gz = Math.max(1, pgz - SHIFT_RADIUS); gz <= Math.min(grid - 2, pgz + SHIFT_RADIUS); gz++) {
-                if (!maze.isWall(gx, gz)) continue;
-                boolean splitsX = !maze.isWall(gx - 1, gz) && !maze.isWall(gx + 1, gz);
-                boolean splitsZ = !maze.isWall(gx, gz - 1) && !maze.isWall(gx, gz + 1);
-                if (!splitsX && !splitsZ) continue;
+                if (!wall(gx, gz)) continue;
+                int a;
+                int b;
+                if (!wall(gx - 1, gz) && !wall(gx + 1, gz)) {
+                    a = dist[gx - 1][gz];
+                    b = dist[gx + 1][gz];
+                } else if (!wall(gx, gz - 1) && !wall(gx, gz + 1)) {
+                    a = dist[gx][gz - 1];
+                    b = dist[gx][gz + 1];
+                } else {
+                    continue;
+                }
+                if (a == Integer.MAX_VALUE || b == Integer.MAX_VALUE) continue;
+                int near = Math.max(a, b);
+                // Сторона, на которой "дальше от выхода", должна быть рядом с игроком по пути
+                if (Math.abs(near - here) > SHIFT_RADIUS * 2) continue;
                 if (isInView(player, lookX, lookZ, gx, gz)) continue;
-                BlockPos base = mazeOrigin.add(gx * CELL_SIZE, 0, gz * CELL_SIZE);
-                if (opened.contains(base)) continue;
-                candidates.add(new int[]{gx, gz});
-            }
-        }
-        if (!candidates.isEmpty()) {
-            int[] pick = candidates.get(session.random.nextInt(candidates.size()));
-            BlockPos base = mazeOrigin.add(pick[0] * CELL_SIZE, 0, pick[1] * CELL_SIZE);
-            for (int x = 0; x < CELL_SIZE; x++) {
-                for (int z = 0; z < CELL_SIZE; z++) {
-                    for (int y = 0; y < WALL_HEIGHT - 1; y++) {
-                        setBulk(world, base.add(x, y, z), Blocks.AIR.getDefaultState());
-                    }
+                int gain = Math.abs(a - b) - 2;
+                if (gain > bestGain) {
+                    bestGain = gain;
+                    best = new int[]{gx, gz};
                 }
             }
-            opened.add(base);
-            session.sound(base, SoundEvents.BLOCK_DEEPSLATE_BREAK, SoundCategory.BLOCKS, 1.0f, 0.5f);
-            world.spawnParticles(ParticleTypes.EXPLOSION, base.getX() + 1.5, base.getY() + 1.5, base.getZ() + 1.5,
-                    2, 1.0, 1.0, 1.0, 0.0);
         }
-
-        for (int i = 0; i < opened.size(); i++) {
-            BlockPos base = opened.get(i);
-            int gx = (base.getX() - mazeOrigin.getX()) / CELL_SIZE;
-            int gz = (base.getZ() - mazeOrigin.getZ()) / CELL_SIZE;
-            if (isNearAnyPlayer(session, gx, gz)) continue;
-            if (opened.size() <= MAX_OPEN_PASSAGES && isInView(player, lookX, lookZ, gx, gz)) continue;
-            fillWall(world, base, session.random);
-            opened.remove(i);
-            session.sound(base, SoundEvents.BLOCK_DEEPSLATE_PLACE, SoundCategory.BLOCKS, 1.0f, 0.5f);
-            break;
+        if (best == null) return;
+        opened.add(key(best[0], best[1]));
+        BlockPos base = mazeOrigin.add(best[0] * CELL_SIZE, 0, best[1] * CELL_SIZE);
+        for (int x = 0; x < CELL_SIZE; x++) {
+            for (int z = 0; z < CELL_SIZE; z++) {
+                for (int y = 0; y < WALL_HEIGHT; y++) {
+                    setBulk(world, base.add(x, y, z), Blocks.AIR.getDefaultState());
+                }
+            }
         }
-    }
-
-    private boolean isNearAnyPlayer(DreamSession session, int gx, int gz) {
-        for (ServerPlayerEntity player : session.players()) {
-            int pgx = Math.floorDiv(player.getBlockX() - mazeOrigin.getX(), CELL_SIZE);
-            int pgz = Math.floorDiv(player.getBlockZ() - mazeOrigin.getZ(), CELL_SIZE);
-            if (Math.abs(gx - pgx) <= 1 && Math.abs(gz - pgz) <= 1) return true;
-        }
-        return false;
+        set(world, base.add(1, WALL_HEIGHT - 1, 1), Blocks.SOUL_LANTERN.getDefaultState()
+                .with(net.minecraft.block.LanternBlock.HANGING, true));
+        session.sound(base, SoundEvents.BLOCK_DEEPSLATE_BREAK, SoundCategory.BLOCKS, 1.2f, 0.5f);
+        world.spawnParticles(ParticleTypes.CAMPFIRE_COSY_SMOKE, base.getX() + 1.5, base.getY() + 1.5, base.getZ() + 1.5,
+                12, 1.0, 1.0, 1.0, 0.01);
+        DreamHints.show(player, tr("somnium.hint.mine.shortcut").formatted(Formatting.AQUA), 6);
     }
 
     /** В поле зрения (~100° от взгляда) или вплотную к игроку — такие места не трогаем. */

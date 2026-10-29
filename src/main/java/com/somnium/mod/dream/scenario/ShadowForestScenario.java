@@ -89,7 +89,6 @@ public final class ShadowForestScenario extends DreamScenario {
 
     @Override
     public void applyEffects(ServerPlayerEntity player, int duration) {
-        DreamFx.effect(player, StatusEffects.BLINDNESS, duration, 0);
         DreamFx.effect(player, StatusEffects.SLOWNESS, duration, 0);
     }
 

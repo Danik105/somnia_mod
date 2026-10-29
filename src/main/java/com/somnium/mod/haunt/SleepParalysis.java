@@ -61,8 +61,8 @@ public final class SleepParalysis {
 
     /** Решает, будет ли паралич вместо сна. */
     public static boolean roll(ServerPlayerEntity player) {
-        if (player.isCreative() || player.isSpectator()) return false;
         if (FORCED_NEXT.remove(player.getUuid())) return true;
+        if (player.isCreative() || player.isSpectator()) return false;
         float sanity = SanityManager.get(player).getSanity();
         float chance = sanity >= 60 ? 0.04f : sanity >= 40 ? 0.10f : sanity >= 20 ? 0.20f : 0.30f;
         return RANDOM.nextFloat() < chance;
@@ -80,6 +80,7 @@ public final class SleepParalysis {
         BlockPos foot = bed.offset(head.getOpposite());
         Direction out = head.getOpposite();
         ACTIVE.put(player.getUuid(), bed.toImmutable());
+        com.somnium.mod.dream.DreamManager.cancelPendingSleep(player.getUuid());
 
         // Куда смотрит камера: сначала на силуэт, потом на руки у изножья
         Vec3d[] look = {foot.toCenterPos().add(Vec3d.of(out.getVector()).multiply(12)).add(0, 1.5, 0)};

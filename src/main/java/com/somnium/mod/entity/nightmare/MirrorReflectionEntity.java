@@ -133,7 +133,7 @@ public class MirrorReflectionEntity extends AbstractNightmareEntity implements S
     private void startAttacking() {
         this.getWorld().playSound(null, this.getBlockPos(), SoundEvents.BLOCK_GLASS_BREAK, SoundCategory.HOSTILE, 3.0f, 0.3f);
         if (targetPlayer != null) {
-            targetPlayer.addStatusEffect(new StatusEffectInstance(StatusEffects.BLINDNESS, 200, 0, false, false, true));
+            targetPlayer.addStatusEffect(new StatusEffectInstance(StatusEffects.DARKNESS, 60, 0, false, false, true));
             this.setTarget(targetPlayer);
         }
         this.getAttributeInstance(EntityAttributes.GENERIC_MOVEMENT_SPEED).setBaseValue(0.35);

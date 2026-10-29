@@ -35,7 +35,7 @@
   "somnium.dream.mirror_wastes": "Сон: Пустошь зеркал",
   "somnium.dream.mirror_wastes.objective": "Догони своё отражение и коснись ускользающего зеркала 3 раза. За тобой идёт двойник, и после каждого касания он шагает быстрее.",
   "somnium.dream.collapsing_mine": "Сон: Шахта-лабиринт",
-  "somnium.dream.collapsing_mine.objective": "Найди дверь из лабиринта, дорогу покажет Компас выхода. Проходы за спиной заваливает.",
+  "somnium.dream.collapsing_mine.objective": "Найди дверь из лабиринта, дорогу покажет Компас выхода. Шахта помогает: за спиной иногда обрушается стена и открывает путь короче.",
   "somnium.dream.crimson_feast": "Сон: Кровавый пир",
   "somnium.dream.crimson_feast.objective": "Судьи подадут 5 блюд. Свежее съешь. Порченое (зелёное имя, дым) сожги: блюдо в одну руку, зажигалку в другую, ПКМ. В конце выпей Кубок тоста.",
   "somnium.dream.void_of_eyes": "Сон: Пустота с глазами",
@@ -227,5 +227,12 @@
   "somnium.paralysis.morning": "Утро",
   "somnium.paralysis.morning_sub": "...это ведь был просто сон?",
   "somnium.command.paralysis": "Сонный паралич начался у игроков: %s",
-  "somnium.command.paralysis_next": "%s не в кровати. Паралич начнётся, когда он ляжет спать."
+  "somnium.command.paralysis_next": "%s не в кровати. Паралич начнётся, когда он ляжет спать.",
+  "somnium.hint.mine.shortcut": "За спиной осыпалась стена. Там проход, он ведёт ближе к выходу.",
+  "somnium.scare.mirror": "ЭТО НЕ ТЫ",
+  "somnium.scare.feast": "ЕШЬ",
+  "somnium.scare.eyes": "ОНИ СМОТРЯТ",
+  "somnium.scare.train.station.1": "«Следующая остановка — конечная. Поезд дальше не идёт. Никогда.»",
+  "somnium.scare.train.station.2": "«Уважаемые пассажиры, не оставляйте спящих без присмотра.»",
+  "somnium.scare.train.station.3": "«Станция... станция... станция...»"
 }
