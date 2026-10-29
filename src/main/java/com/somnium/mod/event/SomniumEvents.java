@@ -66,6 +66,7 @@ public final class SomniumEvents {
         ServerPlayerEvents.COPY_FROM.register((oldPlayer, newPlayer, alive) ->
                 SomniumPlayerState.of(newPlayer).copyFrom(SomniumPlayerState.of(oldPlayer)));
         ServerEntityEvents.ENTITY_LOAD.register(DreamManager::onEntityLoad);
+        ServerEntityEvents.ENTITY_LOAD.register((entity, world) -> com.somnium.mod.haunt.Horror.onEntityLoad(entity));
 
         registerInteractions();
         registerWorldProtection();

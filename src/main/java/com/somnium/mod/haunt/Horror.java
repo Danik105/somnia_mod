@@ -58,6 +58,10 @@ public final class Horror {
     private static final List<Task> TASKS = new ArrayList<>();
     private static final List<Task> INCOMING = new ArrayList<>();
     private static final Map<UUID, Hold> CUTSCENES = new HashMap<>();
+    /** Временные видения этого запуска сервера; всё с тегом vision вне списка — остатки прошлого запуска. */
+    private static final java.util.Set<UUID> VISIONS = new java.util.HashSet<>();
+    private static final List<Entity> STALE = new ArrayList<>();
+    public static final String VISION_TAG = "somnium_vision";
     private static long now;
 
     private Horror() {}
@@ -66,6 +70,11 @@ public final class Horror {
 
     public static void tick(MinecraftServer server) {
         now = server.getTicks();
+        if (!STALE.isEmpty()) {
+            List<Entity> stale = new ArrayList<>(STALE);
+            STALE.clear();
+            stale.forEach(Entity::discard);
+        }
         if (!INCOMING.isEmpty()) {
             TASKS.addAll(INCOMING);
             INCOMING.clear();
@@ -106,8 +115,21 @@ public final class Horror {
         INCOMING.add(new Task(now + Math.max(1, ticks), action));
     }
 
+    /** Пометить сущность как временное видение (до spawnEntity). */
+    public static void vision(Entity entity) {
+        entity.addCommandTag(VISION_TAG);
+        VISIONS.add(entity.getUuid());
+    }
+
+    /** Видение, сохранившееся в мире с прошлого запуска, удаляется при загрузке. */
+    public static void onEntityLoad(Entity entity) {
+        if (entity.getCommandTags().contains(VISION_TAG) && !VISIONS.contains(entity.getUuid())) STALE.add(entity);
+    }
+
     public static void clear() {
         TASKS.clear();
+        VISIONS.clear();
+        STALE.clear();
         INCOMING.clear();
         CUTSCENES.clear();
     }

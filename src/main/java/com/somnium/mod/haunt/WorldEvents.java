@@ -74,7 +74,7 @@ public final class WorldEvents {
 
     private WorldEvents() {}
 
-    private static void add(String id, float maxSanity, int weight, Action action) {
+    static void add(String id, float maxSanity, int weight, Action action) {
         Event event = new Event(id, maxSanity, weight, action);
         EVENTS.add(event);
         BY_ID.put(id, event);
@@ -99,7 +99,7 @@ public final class WorldEvents {
             for (Event event : pool) {
                 roll -= event.weight();
                 if (roll < 0) {
-                    if (event.action().run(player, player.getServerWorld(), RANDOM)) return true;
+                    if (safeRun(event, player)) return true;
                     break;
                 }
             }
@@ -110,7 +110,17 @@ public final class WorldEvents {
     /** Конкретное событие без проверки рассудка (для сценариев снов). */
     public static boolean fire(String id, ServerPlayerEntity player) {
         Event event = BY_ID.get(id);
-        return event != null && event.action().run(player, player.getServerWorld(), RANDOM);
+        return event != null && safeRun(event, player);
+    }
+
+    /** Ошибка в одном событии не должна ронять тик сервера. */
+    private static boolean safeRun(Event event, ServerPlayerEntity player) {
+        try {
+            return event.action().run(player, player.getServerWorld(), RANDOM);
+        } catch (RuntimeException ex) {
+            com.somnium.mod.SomniumMod.LOGGER.warn("[Somnium] Событие {} упало", event.id(), ex);
+            return false;
+        }
     }
 
     // ----- помощники -----
@@ -155,6 +165,7 @@ public final class WorldEvents {
         mob.setSilent(true);
         mob.setInvulnerable(true);
         mob.addCommandTag("somnium_haunt");
+        Horror.vision(mob);
         Horror.face(mob, faceTo.getEyePos());
         w.spawnEntity(mob);
         return mob;
@@ -520,5 +531,7 @@ public final class WorldEvents {
             }
             return true;
         });
+        FakeStructures.registerAll();
+        MoreEvents.registerAll();
     }
 }
