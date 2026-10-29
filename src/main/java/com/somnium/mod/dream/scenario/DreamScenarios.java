@@ -23,6 +23,8 @@ public final class DreamScenarios {
         register("dream_within_dream", DreamWithinDreamScenario::new);
         register("stairwell", StairwellScenario::new);
         register("mirror_room", MirrorRoomScenario::new);
+        register("elevator", ElevatorScenario::new);
+        register("night_train", NightTrainScenario::new);
     }
 
     private DreamScenarios() {}

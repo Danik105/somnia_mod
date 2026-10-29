@@ -95,6 +95,8 @@ public final class DreamManager {
     private static final Set<UUID> PENDING_RESTORE = new HashSet<>();
     private static final Map<UUID, Long> LANDING_IMMUNITY = new HashMap<>();
     private static final List<Entity> PENDING_DISCARD = new ArrayList<>();
+    /** Тела, чей владелец уже не спит: подгрузились вместе с чанком после пробуждения. */
+    private static final List<SleepingBodyEntity> PENDING_BODIES = new ArrayList<>();
 
     private DreamManager() {}
 
@@ -405,6 +407,7 @@ public final class DreamManager {
     public static void tick(MinecraftServer server) {
         long now = server.getTicks();
         flushDiscards();
+        flushStaleBodies();
         processPendingRestores(server);
         processPendingWakes(server);
         processPendingSleeps(server, now);
@@ -552,6 +555,7 @@ public final class DreamManager {
         PENDING_RESTORE.clear();
         LANDING_IMMUNITY.clear();
         PENDING_DISCARD.clear();
+        PENDING_BODIES.clear();
     }
 
     // =====================================================================
@@ -565,6 +569,11 @@ public final class DreamManager {
      */
     public static void onEntityLoad(Entity entity, ServerWorld world) {
         if (entity instanceof PlayerEntity) return;
+        if (entity instanceof SleepingBodyEntity body) {
+            // Чанк с кроватью выгружался, пока игрок спал, и тело загрузилось уже после пробуждения
+            if (body.getSkinOwner().map(id -> !isDreaming(id)).orElse(true)) PENDING_BODIES.add(body);
+            return;
+        }
         if (entity instanceof ArmorStandEntity stand && isLegacySleepingBody(stand)) {
             PENDING_DISCARD.add(entity);
             return;
@@ -617,6 +626,15 @@ public final class DreamManager {
     }
 
     private static int discardReports = 0;
+
+    private static void flushStaleBodies() {
+        if (PENDING_BODIES.isEmpty()) return;
+        List<SleepingBodyEntity> batch = new ArrayList<>(PENDING_BODIES);
+        PENDING_BODIES.clear();
+        for (SleepingBodyEntity body : batch) {
+            if (!body.isRemoved()) body.removeFromBed();
+        }
+    }
 
     // =====================================================================
     // Тело в кровати и защита кровати

@@ -63,9 +63,11 @@ public final class SomniumClient implements ClientModInitializer {
         EntityRendererRegistry.register(ModEntities.FLESH_GOLEM, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.WATCHER, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.NIGHTMARE_AMALGAM, NightmarePlaceholderRenderer::new);
-        EntityRendererRegistry.register(ModEntities.PHANTOM_EEL, NightmarePlaceholderRenderer::new);
+        EntityRendererRegistry.register(ModEntities.PHANTOM_EEL, PhantomEelRenderer::new);
         EntityRendererRegistry.register(ModEntities.STALKER, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.MIRROR_REFLECTION, SkinnedMobRenderer::new);
+        EntityRendererRegistry.register(ModEntities.CONTROLLER, NightmarePlaceholderRenderer::new);
+        EntityRendererRegistry.register(ModEntities.PASSENGER, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.SLEEPING_BODY, SleepingBodyRenderer::new);
 
         // ДОБАВЛЕНО ("портал в мир снов"): плёнка портала полупрозрачная, как у портала ада

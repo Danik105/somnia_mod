@@ -2,6 +2,8 @@ package com.somnium.mod.entity;
 
 import com.somnium.mod.dream.DreamManager;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityDimensions;
+import net.minecraft.entity.EntityPose;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.LivingEntity;
@@ -31,7 +33,8 @@ public class SleepingBodyEntity extends LivingEntity implements SkinOwner {
 
     private static final TrackedData<Optional<UUID>> OWNER =
             DataTracker.registerData(SleepingBodyEntity.class, TrackedDataHandlerRegistry.OPTIONAL_UUID);
-    private static final int SELF_CLEAN_GRACE_TICKS = 100;
+    private static final int SELF_CLEAN_GRACE_TICKS = 20;
+    private static final float PLAYER_EYE_HEIGHT = 1.62f;
 
     public SleepingBodyEntity(EntityType<? extends SleepingBodyEntity> type, World world) {
         super(type, world);
@@ -71,10 +74,19 @@ public class SleepingBodyEntity extends LivingEntity implements SkinOwner {
     public void tick() {
         super.tick();
         if (this.getWorld().isClient()) return;
-        if (this.age > SELF_CLEAN_GRACE_TICKS && this.age % 40 == 0) {
+        if (this.age > SELF_CLEAN_GRACE_TICKS && this.age % 10 == 0) {
             Optional<UUID> owner = getSkinOwner();
             if (owner.isEmpty() || !DreamManager.isDreaming(owner.get())) removeFromBed();
         }
+    }
+
+    /**
+     * Рендер лежачей позы сдвигает модель к изголовью на высоту глаз стоя. Хитбокс тела
+     * 0,6 блока, и без этого модель съезжала с кровати больше чем на блок.
+     */
+    @Override
+    protected float getActiveEyeHeight(EntityPose pose, EntityDimensions dimensions) {
+        return pose == EntityPose.SLEEPING ? 0.2f : PLAYER_EYE_HEIGHT;
     }
 
     @Override

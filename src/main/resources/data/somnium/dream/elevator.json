@@ -1,0 +1,12 @@
+{
+  "name": "somnium.dream.elevator",
+  "objective": "somnium.dream.elevator.objective",
+  "dimension": "somnium:dream_elevator",
+  "scenario": "somnium:elevator",
+  "monsters": [
+    "somnium:passenger"
+  ],
+  "weight": 14,
+  "max_sanity": 100,
+  "duration_ticks": 4800
+}

@@ -1,0 +1,12 @@
+{
+  "name": "somnium.dream.night_train",
+  "objective": "somnium.dream.night_train.objective",
+  "dimension": "somnium:dream_night_train",
+  "scenario": "somnium:night_train",
+  "monsters": [
+    "somnium:passenger"
+  ],
+  "weight": 14,
+  "max_sanity": 100,
+  "duration_ticks": 5400
+}

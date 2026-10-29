@@ -46,6 +46,8 @@ public final class BleedThroughManager {
     private static final int GROUND_SCAN_DEPTH = 10;
     private static final Identifier FALLBACK_DREAM = SomniumMod.id("shadow_forest");
     private static final Identifier STALKER = SomniumMod.id("stalker");
+    private static final Identifier AMALGAM = SomniumMod.id("nightmare_amalgam");
+    private static final float AMALGAM_SANITY = 5.0f;
 
     private static final Map<UUID, Long> LAST_RUPTURE_TICK = new HashMap<>();
     private static final Map<UUID, Long> LAST_ECHO_TICK = new HashMap<>();
@@ -101,6 +103,14 @@ public final class BleedThroughManager {
         if (now - LAST_RUPTURE_TICK.getOrDefault(player.getUuid(), -RUPTURE_COOLDOWN_TICKS) < RUPTURE_COOLDOWN_TICKS) return;
         List<Identifier> pool = new ArrayList<>(monsterPool(data));
         pool.add(STALKER);
+        // На самом дне рассудка может прийти Кошмар (босс), но не больше одного за разрыв
+        if (data.getSanity() <= AMALGAM_SANITY && RANDOM.nextFloat() < 0.25f
+                && spawnMonsterNear(world, player, AMALGAM)) {
+            LAST_RUPTURE_TICK.put(player.getUuid(), now);
+            player.sendMessage(Text.translatable("somnium.warning.amalgam"), true);
+            player.playSound(ModSounds.RUPTURE_STINGER, SoundCategory.HOSTILE, 1.0f, 0.5f);
+            return;
+        }
 
         int freeSlots = MAX_ACTIVE_MOBS_PER_PLAYER - countActive(player.getUuid());
         int count = Math.min(2 + RANDOM.nextInt(3), freeSlots);

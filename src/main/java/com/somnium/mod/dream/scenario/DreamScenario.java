@@ -3,7 +3,12 @@ package com.somnium.mod.dream.scenario;
 import com.somnium.mod.dream.DreamSession;
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
+import net.minecraft.block.DoorBlock;
+import net.minecraft.block.entity.SignBlockEntity;
+import net.minecraft.block.entity.SignText;
+import net.minecraft.block.enums.DoubleBlockHalf;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.LivingEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -15,6 +20,9 @@ import net.minecraft.util.hit.BlockHitResult;
 import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockBox;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Direction;
+import net.minecraft.util.math.MathHelper;
+import net.minecraft.util.math.Vec3d;
 
 /**
  * Сценарий одного сна. Экземпляр создаётся на каждую сессию, поэтому всё состояние
@@ -111,6 +119,37 @@ public abstract class DreamScenario {
 
     protected static void setBulk(ServerWorld world, BlockPos pos, BlockState state) {
         world.setBlockState(pos, state, BULK);
+    }
+
+    /** Вощёная табличка с текстом (до 4 строк): её нельзя редактировать. */
+    protected static void sign(ServerWorld world, BlockPos pos, BlockState state, Text... lines) {
+        world.setBlockState(pos, state, BULK);
+        if (world.getBlockEntity(pos) instanceof SignBlockEntity sign) {
+            SignText text = new SignText();
+            for (int i = 0; i < lines.length && i < 4; i++) text = text.withMessage(i, lines[i]);
+            sign.setText(text, true);
+            sign.setWaxed(true);
+        }
+    }
+
+    /** Двухблочная дверь; lower — нижняя половина. */
+    protected static void door(ServerWorld world, BlockPos lower, Block block, Direction facing, boolean open) {
+        BlockState state = block.getDefaultState().with(DoorBlock.FACING, facing).with(DoorBlock.OPEN, open);
+        world.setBlockState(lower, state.with(DoorBlock.HALF, DoubleBlockHalf.LOWER), BULK);
+        world.setBlockState(lower.up(), state.with(DoorBlock.HALF, DoubleBlockHalf.UPPER), BULK);
+    }
+
+    /** Поворачивает голову и тело моба к точке (для мобов без ИИ). */
+    protected static void faceTowards(Entity entity, Vec3d target) {
+        double dx = target.x - entity.getX();
+        double dy = target.y - entity.getEyeY();
+        double dz = target.z - entity.getZ();
+        float yaw = (float) (MathHelper.atan2(dz, dx) * MathHelper.DEGREES_PER_RADIAN) - 90.0f;
+        float pitch = (float) -(MathHelper.atan2(dy, Math.sqrt(dx * dx + dz * dz)) * MathHelper.DEGREES_PER_RADIAN);
+        entity.setYaw(yaw);
+        entity.setHeadYaw(yaw);
+        entity.setPitch(pitch);
+        if (entity instanceof LivingEntity living) living.setBodyYaw(yaw);
     }
 
     protected static MutableText tr(String key, Object... args) {

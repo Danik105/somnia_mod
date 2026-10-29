@@ -38,19 +38,24 @@ public class NightmarePlaceholderRenderer<T extends AbstractNightmareEntity> ext
         if (entity instanceof DrownedWretchEntity) return TEX_DROWNED;
         if (entity instanceof PhantomEelEntity) return TEX_STRAY;
         // Лес теней
-        if (entity instanceof LurkingShadeEntity) return TEX_WITHER_SKELETON;
+        if (entity instanceof LurkingShadeEntity) return somniumTex("lurking_shade");
         // Пустошь зеркал
         if (entity instanceof MirroredDoubleEntity) return somniumTex("mirrored_double");
         // Шахта
         if (entity instanceof ScreamingMinerEntity) return somniumTex("screaming_miner");
-        if (entity instanceof BlindBurrowerEntity) return TEX_SKELETON;
+        if (entity instanceof BlindBurrowerEntity) return somniumTex("blind_burrower");
         // Кровавый пир
         if (entity instanceof FeralVillagerEntity) return somniumTex("feral_villager");
         if (entity instanceof FleshGolemEntity) return somniumTex("flesh_golem");
         // Пустота с глазами
         if (entity instanceof WatcherEntity) return somniumTex("watcher");
         // Сон-в-сне (босс)
-        if (entity instanceof NightmareAmalgamEntity) return TEX_WITHER_SKELETON;
+        if (entity instanceof NightmareAmalgamEntity) return somniumTex("nightmare_amalgam");
+        // Электричка и Лифт
+        if (entity instanceof ControllerEntity) return somniumTex("controller");
+        if (entity instanceof PassengerEntity passenger) {
+            return somniumTex(passenger.getVariant() == 1 ? "passenger_man" : "passenger");
+        }
         return TEX_ZOMBIE;
     }
 }
