@@ -51,6 +51,7 @@ public final class SomniumClient implements ClientModInitializer {
         HudRenderCallback.EVENT.register((drawContext, tickCounter) -> {
             SanityHudRenderer.render(drawContext, clientSanity, dreamHudState.active());
             DreamObjectiveHudRenderer.render(drawContext, dreamHudState);
+            HorrorOverlay.render(drawContext);
         });
 
         // Рендереры сущностей. Спящее тело и отражения рисуются скином игрока-владельца.
@@ -68,6 +69,10 @@ public final class SomniumClient implements ClientModInitializer {
         EntityRendererRegistry.register(ModEntities.MIRROR_REFLECTION, SkinnedMobRenderer::new);
         EntityRendererRegistry.register(ModEntities.CONTROLLER, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.PASSENGER, NightmarePlaceholderRenderer::new);
+        EntityRendererRegistry.register(ModEntities.THIN_MAN, ThinManRenderer::new);
+        EntityRendererRegistry.register(ModEntities.CRAWLER, CrawlerRenderer::new);
+        EntityRendererRegistry.register(ModEntities.SMILER, SmilerRenderer::new);
+        HorrorOverlay.register();
         EntityRendererRegistry.register(ModEntities.SLEEPING_BODY, SleepingBodyRenderer::new);
 
         // ДОБАВЛЕНО ("портал в мир снов"): плёнка портала полупрозрачная, как у портала ада

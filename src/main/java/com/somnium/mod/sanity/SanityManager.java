@@ -49,6 +49,7 @@ public final class SanityManager {
                 add(player, -drain, false);
             }
             BleedThroughManager.evaluate(player, data);
+            com.somnium.mod.haunt.HauntManager.tick(player, data);
         }
         sync(player);
     }

@@ -72,6 +72,16 @@ public final class ModEntities {
     public static final EntityType<PassengerEntity> PASSENGER = register(
             "passenger", PassengerEntity::new, SpawnGroup.MONSTER, 0.6f, 1.95f);
 
+    // Преследователи при низком рассудке и обитатели "Закулисья"
+    public static final EntityType<ThinManEntity> THIN_MAN = register(
+            "thin_man", ThinManEntity::new, SpawnGroup.MONSTER, 0.7f, 3.2f);
+
+    public static final EntityType<CrawlerEntity> CRAWLER = register(
+            "crawler", CrawlerEntity::new, SpawnGroup.MONSTER, 1.1f, 0.6f);
+
+    public static final EntityType<SmilerEntity> SMILER = register(
+            "smiler", SmilerEntity::new, SpawnGroup.MONSTER, 0.6f, 1.95f);
+
     // ДОБАВЛЕНО (мультиплеер): спящее тело игрока, которое остаётся в реальном мире,
     // пока сам игрок находится в измерении сна. Другие игроки видят это тело лежащим в кровати.
     public static final EntityType<SleepingBodyEntity> SLEEPING_BODY = Registry.register(
@@ -97,7 +107,7 @@ public final class ModEntities {
 
     public static void register() {
         // Метод-триггер для загрузки класса (гарантирует инициализацию static полей выше)
-        SomniumMod.LOGGER.info("[Somnium] Зарегистрировано 14 сущностей-кошмаров + 1 служебная (sleeping_body)");
+        SomniumMod.LOGGER.info("[Somnium] Зарегистрировано 17 сущностей-кошмаров + 1 служебная (sleeping_body)");
     }
 
     /** Регистрация дефолтных атрибутов — вызывается в ModInitializer ДО первого спавна. */
@@ -116,6 +126,9 @@ public final class ModEntities {
         FabricDefaultAttributeRegistry.register(MIRROR_REFLECTION, MirrorReflectionEntity.createMirrorReflectionAttributes());
         FabricDefaultAttributeRegistry.register(CONTROLLER, ControllerEntity.createAttributes());
         FabricDefaultAttributeRegistry.register(PASSENGER, PassengerEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(THIN_MAN, ThinManEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(CRAWLER, CrawlerEntity.createAttributes());
+        FabricDefaultAttributeRegistry.register(SMILER, SmilerEntity.createAttributes());
         FabricDefaultAttributeRegistry.register(SLEEPING_BODY, SleepingBodyEntity.createSleepingBodyAttributes());
     }
 }

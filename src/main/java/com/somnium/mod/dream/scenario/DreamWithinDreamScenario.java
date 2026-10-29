@@ -5,6 +5,10 @@ import com.somnium.mod.dream.DreamHints;
 import com.somnium.mod.dream.DreamManager;
 import com.somnium.mod.dream.DreamOutcome;
 import com.somnium.mod.dream.DreamSession;
+import com.somnium.mod.entity.nightmare.ThinManEntity;
+import com.somnium.mod.haunt.Horror;
+import com.somnium.mod.haunt.WorldEvents;
+import com.somnium.mod.registry.ModEntities;
 import com.somnium.mod.registry.ModSounds;
 import net.minecraft.block.BedBlock;
 import net.minecraft.block.BlockState;
@@ -46,6 +50,12 @@ public final class DreamWithinDreamScenario extends DreamScenario {
     private boolean nightmare;
     private long phaseStart;
     private long nextLightning;
+    private long nextMoment;
+    private int momentIndex;
+
+    /** Страшные моменты кошмарной фазы по очереди; "cutscene" — встреча с Тощим. */
+    private static final String[] MOMENTS = {"footsteps", "torches_out", "thin_glimpse", "knock", "sleep_paralysis",
+            "eyes_in_dark", "cutscene", "turn_around", "stranger", "screamer", "pillar_behind", "laughter", "door_toggle"};
 
     @Override
     public boolean isSilent() {
@@ -103,6 +113,7 @@ public final class DreamWithinDreamScenario extends DreamScenario {
             nightmare = true;
             phaseStart = now;
             nextLightning = now + 60;
+            nextMoment = now + 160;
             for (ServerPlayerEntity player : session.players()) {
                 player.playSound(ModSounds.DREAM_DREAD_AMBIENCE, SoundCategory.AMBIENT, 2.0f, 0.5f);
                 player.playSound(ModSounds.RUPTURE_STINGER, SoundCategory.HOSTILE, 1.5f, 0.5f);
@@ -130,6 +141,14 @@ public final class DreamWithinDreamScenario extends DreamScenario {
                 player.playSound(SoundEvents.ENTITY_WITHER_AMBIENT, SoundCategory.HOSTILE, 0.8f, 0.5f);
             }
         }
+        if (now >= nextMoment) {
+            nextMoment = now + 300 + session.random.nextInt(150);
+            String moment = MOMENTS[momentIndex++ % MOMENTS.length];
+            for (ServerPlayerEntity player : session.players()) {
+                if (moment.equals("cutscene")) thinCutscene(session, player);
+                else if (!WorldEvents.fire(moment, player)) WorldEvents.fire("whisper", player);
+            }
+        }
         if (now >= nextLightning) {
             nextLightning = now + 160 + session.random.nextInt(160);
             ServerPlayerEntity target = session.randomPlayer();
@@ -141,6 +160,33 @@ public final class DreamWithinDreamScenario extends DreamScenario {
                 session.add(bolt);
             }
         }
+    }
+
+    /** Свет гаснет, перед игроком стоит Тощий, камера не отпускает, потом он бросается. */
+    private void thinCutscene(DreamSession session, ServerPlayerEntity player) {
+        ServerWorld world = session.world;
+        BlockPos pos = Horror.ground(world, Horror.around(player, 0, 7).add(0, 1, 0), 6);
+        if (pos == null) return;
+        ThinManEntity thin = ModEntities.THIN_MAN.create(world);
+        if (thin == null) return;
+        thin.refreshPositionAndAngles(pos.getX() + 0.5, pos.getY(), pos.getZ() + 0.5, 0f, 0f);
+        Horror.face(thin, player.getEyePos());
+        thin.glimpse(100);
+        session.add(thin);
+        WorldEvents.fire("torches_out", player);
+        Horror.cutscene(player, 85, () -> thin.isRemoved() ? null : thin.getPos().add(0, thin.getHeight() * 0.85, 0));
+        Horror.sound(player, SoundEvents.ENTITY_WARDEN_HEARTBEAT, player.getEyePos(), 1.2f, 0.8f);
+        Horror.later(20, () -> Horror.sound(player, SoundEvents.ENTITY_WARDEN_HEARTBEAT, player.getEyePos(), 1.2f, 0.9f));
+        Horror.later(30, () -> DreamFx.title(player, tr("somnium.dwd.lie.1").formatted(Formatting.DARK_RED, Formatting.BOLD), null, 2, 25, 5));
+        Horror.later(40, () -> Horror.sound(player, SoundEvents.ENTITY_WARDEN_HEARTBEAT, player.getEyePos(), 1.4f, 1.1f));
+        Horror.later(62, () -> {
+            if (thin.isRemoved()) return;
+            var close = Horror.around(player, 0, 1.6);
+            thin.refreshPositionAndAngles(close.x, player.getY(), close.z, 0f, 0f);
+            Horror.face(thin, player.getEyePos());
+            Horror.screamer(player, Horror.FACE_THIN);
+        });
+        Horror.later(78, thin::discard);
     }
 
     @Override

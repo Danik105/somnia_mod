@@ -25,6 +25,7 @@ public final class DreamScenarios {
         register("mirror_room", MirrorRoomScenario::new);
         register("elevator", ElevatorScenario::new);
         register("night_train", NightTrainScenario::new);
+        register("backrooms", BackroomsScenario::new);
     }
 
     private DreamScenarios() {}

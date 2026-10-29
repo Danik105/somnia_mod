@@ -45,9 +45,13 @@ public final class SomniumEvents {
         ServerTickEvents.END_SERVER_TICK.register(server -> {
             DreamManager.tick(server);
             DreamPortalManager.tick(server);
+            com.somnium.mod.haunt.Horror.tick(server);
         });
         ServerLifecycleEvents.SERVER_STARTED.register(DreamSlots::resumeCleanup);
-        ServerLifecycleEvents.SERVER_STOPPING.register(server -> DreamManager.onServerStopping());
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            DreamManager.onServerStopping();
+            com.somnium.mod.haunt.Horror.clear();
+        });
         ServerLifecycleEvents.SERVER_STOPPED.register(server -> DreamSlots.onServerStopped());
 
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> DreamManager.onPlayerJoin(handler.player));
@@ -55,6 +59,7 @@ public final class SomniumEvents {
             DreamManager.onPlayerDisconnect(handler.player);
             DreamPortalManager.onDisconnect(handler.player.getUuid());
             BleedThroughManager.onDisconnect(handler.player.getUuid());
+            com.somnium.mod.haunt.HauntManager.onDisconnect(handler.player.getUuid());
         });
         ServerPlayerEvents.COPY_FROM.register((oldPlayer, newPlayer, alive) ->
                 SomniumPlayerState.of(newPlayer).copyFrom(SomniumPlayerState.of(oldPlayer)));
@@ -62,6 +67,7 @@ public final class SomniumEvents {
 
         registerInteractions();
         registerWorldProtection();
+        com.somnium.mod.SomniumMod.LOGGER.info("[Somnium] Страшных событий в мире: {}", com.somnium.mod.haunt.WorldEvents.count());
     }
 
     private static void registerInteractions() {
