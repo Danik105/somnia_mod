@@ -44,6 +44,7 @@ import java.util.UUID;
 public final class SleepParalysis {
 
     private static final int LENGTH = 270;
+    private static final long NIGHT = 18000L;
     private static final Random RANDOM = new Random();
     private static final Map<UUID, BlockPos> ACTIVE = new HashMap<>();
     private static final Set<UUID> FORCED_NEXT = new HashSet<>();
@@ -175,6 +176,8 @@ public final class SleepParalysis {
             long next = (world.getTimeOfDay() / 24000L + 1) * 24000L;
             world.setTimeOfDay(next);
         }
+        player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.WorldTimeUpdateS2CPacket(
+                world.getTime(), world.getTimeOfDay(), world.getGameRules().getBoolean(net.minecraft.world.GameRules.DO_DAYLIGHT_CYCLE)));
         if (player.isSleeping()) player.wakeUp(false, true);
         SanityManager.get(player).setTicksSinceLastSleep(0L);
         SanityManager.add(player, -8.0f);
@@ -182,7 +185,11 @@ public final class SleepParalysis {
                 Text.translatable("somnium.paralysis.morning_sub").formatted(Formatting.GRAY), 20, 60, 20);
     }
 
-    /** Каждый тик: встать нельзя, а ванильный пропуск ночи не должен разбудить раньше времени. */
+    /**
+     * Каждый тик: встать нельзя (если что-то всё же подняло игрока, укладываем обратно),
+     * а за окном у него глубокая ночь, даже если паралич вызван командой днём. Сервер раз
+     * в секунду шлёт настоящее время, поэтому своё отправляем каждый тик.
+     */
     public static void tick(MinecraftServer server) {
         if (ACTIVE.isEmpty()) return;
         for (var entry : new ArrayList<>(ACTIVE.entrySet())) {
@@ -191,13 +198,11 @@ public final class SleepParalysis {
                 ACTIVE.remove(entry.getKey());
                 continue;
             }
-            boolean tryingToGetUp = !player.isSleeping();
-            if (tryingToGetUp || server.getTicks() % 60 == 0) {
+            if (!player.isSleeping()) {
                 player.sleep(entry.getValue());
-                if (tryingToGetUp) {
-                    player.sendMessage(Text.translatable("somnium.paralysis.cant_move").formatted(Formatting.DARK_GRAY), true);
-                }
+                player.sendMessage(Text.translatable("somnium.paralysis.cant_move").formatted(Formatting.DARK_GRAY), true);
             }
+            DreamFx.sendTime(player, NIGHT);
         }
     }
 
