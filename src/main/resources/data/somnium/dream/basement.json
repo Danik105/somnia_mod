@@ -1,0 +1,12 @@
+{
+  "name": "somnium.dream.basement",
+  "objective": "somnium.dream.basement.objective",
+  "dimension": "somnium:dream_basement",
+  "scenario": "somnium:basement",
+  "monsters": [
+    "somnium:crawler"
+  ],
+  "weight": 10,
+  "max_sanity": 60,
+  "duration_ticks": 4800
+}

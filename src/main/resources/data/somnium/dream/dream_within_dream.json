@@ -1,9 +1,10 @@
 {
-  "display_name_key": "somnium.dream.dream_within_dream",
-  "structure_template": "NONE",
-  "monster_entity_ids": [],
-  "base_weight": 6,
-  "min_sanity_to_appear": 20,
-  "duration_ticks": 9000,
-  "objective": ""
+  "name": "somnium.dream.dream_within_dream",
+  "objective": "somnium.dream.dream_within_dream.objective",
+  "dimension": "somnium:dream_within_dream",
+  "scenario": "somnium:dream_within_dream",
+  "monsters": [],
+  "weight": 6,
+  "max_sanity": 20,
+  "duration_ticks": 9000
 }

@@ -1,0 +1,12 @@
+{
+  "name": "somnium.dream.hospital",
+  "objective": "somnium.dream.hospital.objective",
+  "dimension": "somnium:dream_hospital",
+  "scenario": "somnium:hospital",
+  "monsters": [
+    "somnium:crawler"
+  ],
+  "weight": 12,
+  "max_sanity": 80,
+  "duration_ticks": 6000
+}

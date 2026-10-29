@@ -4,8 +4,11 @@
   "version": "${version}",
   "name": "Somnium — Сны и Рассудок",
   "description": "Каждый сон — путешествие в кошмар. Не спите слишком долго, и кошмары найдут вас сами.",
-  "authors": ["Вы + Claude"],
-  "contact": {},
+  "authors": ["Danik105"],
+  "contact": {
+    "sources": "https://github.com/Danik105/somnia_mod",
+    "issues": "https://github.com/Danik105/somnia_mod/issues"
+  },
   "license": "MIT",
   "icon": "assets/somnium/icon.png",
   "environment": "*",
@@ -19,6 +22,7 @@
   "depends": {
     "fabricloader": ">=0.14.21",
     "fabric-api": "*",
-    "minecraft": "~1.20.1"
+    "minecraft": "~1.20.1",
+    "java": ">=17"
   }
 }

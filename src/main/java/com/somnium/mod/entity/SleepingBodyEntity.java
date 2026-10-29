@@ -2,17 +2,20 @@ package com.somnium.mod.entity;
 
 import com.somnium.mod.dream.DreamManager;
 import net.minecraft.entity.Entity;
+import net.minecraft.entity.EntityDimensions;
+import net.minecraft.entity.EntityPose;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.LivingEntity;
 import net.minecraft.entity.attribute.DefaultAttributeContainer;
+import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.data.DataTracker;
 import net.minecraft.entity.data.TrackedData;
 import net.minecraft.entity.data.TrackedDataHandlerRegistry;
 import net.minecraft.item.ItemStack;
 import net.minecraft.nbt.NbtCompound;
-import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.text.Text;
 import net.minecraft.util.Arm;
 import net.minecraft.world.World;
 
@@ -21,26 +24,17 @@ import java.util.Optional;
 import java.util.UUID;
 
 /**
- * ДОБАВЛЕНО (мультиплеер, "видел как второй всё ещё спит — моделька которая лежит"):
- * физическое тело игрока, лежащее в кровати в реальном мире, пока сам игрок находится
- * в измерении сна. Спавнится DreamManager#spawnSleepingBody при входе в сон и убирается
- * при пробуждении (DreamManager#despawnSleepingBody).
- *
- * Свойства:
- *  - неуязвима (но creative-игрок при желании может её убить — аварийная очистка);
- *  - не толкается и не двигается (NoAI по сути: AI нет уже на уровне LivingEntity);
- *  - хранит UUID владельца в DataTracker (синхронизируется клиенту для рендера скина);
- *  - самоочистка: если владелец вышел с сервера или уже не во сне (перезапуск сервера,
- *    потерянный discard), тело удаляет себя само через короткий грейс-период.
+ * Тело игрока, лежащее в кровати в яви, пока он во сне. Рисуется скином владельца
+ * (см. клиентский SleepingBodyRenderer), занимает кровать (её нельзя занять или сломать).
+ * Неуязвимо, не двигается и удаляет себя само, если владелец уже не спит
+ * (например, после перезапуска сервера).
  */
-public class SleepingBodyEntity extends LivingEntity {
+public class SleepingBodyEntity extends LivingEntity implements SkinOwner {
 
-    /** UUID игрока-владельца (строкой, чтобы DataTracker умел его синхронизировать). */
-    private static final TrackedData<String> OWNER_UUID =
-            DataTracker.registerData(SleepingBodyEntity.class, TrackedDataHandlerRegistry.STRING);
-
-    /** Грейс-период до начала самоочистки (тиков) — защита от гонки при спавне. */
-    private static final int SELF_CLEAN_GRACE_TICKS = 100;
+    private static final TrackedData<Optional<UUID>> OWNER =
+            DataTracker.registerData(SleepingBodyEntity.class, TrackedDataHandlerRegistry.OPTIONAL_UUID);
+    private static final int SELF_CLEAN_GRACE_TICKS = 20;
+    private static final float PLAYER_EYE_HEIGHT = 1.62f;
 
     public SleepingBodyEntity(EntityType<? extends SleepingBodyEntity> type, World world) {
         super(type, world);
@@ -49,31 +43,64 @@ public class SleepingBodyEntity extends LivingEntity {
         this.setNoGravity(true);
     }
 
-    @Override
-    protected void initDataTracker() {
-        super.initDataTracker();
-        this.dataTracker.startTracking(OWNER_UUID, "");
-    }
-
-    public void setOwnerUuid(UUID uuid) {
-        this.dataTracker.set(OWNER_UUID, uuid.toString());
-    }
-
-    public Optional<UUID> getOwnerUuid() {
-        String raw = this.dataTracker.get(OWNER_UUID);
-        if (raw == null || raw.isEmpty()) return Optional.empty();
-        try {
-            return Optional.of(UUID.fromString(raw));
-        } catch (IllegalArgumentException e) {
-            return Optional.empty();
-        }
-    }
-
     public static DefaultAttributeContainer.Builder createSleepingBodyAttributes() {
         return LivingEntity.createLivingAttributes();
     }
 
-    // --- "Пустое" тело: без брони, без предметов, без основной руки ---
+    @Override
+    protected void initDataTracker() {
+        super.initDataTracker();
+        this.dataTracker.startTracking(OWNER, Optional.empty());
+    }
+
+    public void setOwner(ServerPlayerEntity player) {
+        this.dataTracker.set(OWNER, Optional.of(player.getUuid()));
+        this.setCustomName(Text.translatable("somnium.dream.sleeping_body_name", player.getName()));
+        this.setCustomNameVisible(true);
+    }
+
+    @Override
+    public Optional<UUID> getSkinOwner() {
+        return this.dataTracker.get(OWNER);
+    }
+
+    /** Владелец проснулся: освободить кровать и исчезнуть. */
+    public void removeFromBed() {
+        if (this.isSleeping()) this.wakeUp();
+        this.discard();
+    }
+
+    @Override
+    public void tick() {
+        super.tick();
+        if (this.getWorld().isClient()) return;
+        if (this.age > SELF_CLEAN_GRACE_TICKS && this.age % 10 == 0) {
+            Optional<UUID> owner = getSkinOwner();
+            if (owner.isEmpty() || !DreamManager.isDreaming(owner.get())) removeFromBed();
+        }
+    }
+
+    /**
+     * Рендер лежачей позы сдвигает модель к изголовью на высоту глаз стоя. Хитбокс тела
+     * 0,6 блока, и без этого модель съезжала с кровати больше чем на блок.
+     */
+    @Override
+    protected float getActiveEyeHeight(EntityPose pose, EntityDimensions dimensions) {
+        return pose == EntityPose.SLEEPING ? 0.2f : PLAYER_EYE_HEIGHT;
+    }
+
+    @Override
+    public boolean damage(DamageSource source, float amount) {
+        return false;
+    }
+
+    @Override
+    public boolean isPushable() {
+        return false;
+    }
+
+    @Override
+    public void pushAway(Entity entity) {}
 
     @Override
     public Iterable<ItemStack> getArmorItems() {
@@ -86,68 +113,22 @@ public class SleepingBodyEntity extends LivingEntity {
     }
 
     @Override
-    public void equipStack(EquipmentSlot slot, ItemStack stack) {
-        // no-op: телу нечего экипировать
-    }
+    public void equipStack(EquipmentSlot slot, ItemStack stack) {}
 
     @Override
     public Arm getMainArm() {
         return Arm.RIGHT;
     }
 
-    // --- Неподвижность: тело нельзя сдвинуть с кровати ---
-
-    @Override
-    public boolean isPushable() {
-        return false;
-    }
-
-    @Override
-    public void pushAway(Entity entity) {
-        // no-op: не отталкиваем других
-    }
-
-    @Override
-    public void tick() {
-        super.tick();
-        if (this.getWorld().isClient()) return;
-
-        // Самоочистка: раз в 2 секунды после грейс-периода проверяем, что владелец
-        // всё ещё на сервере и всё ещё во сне. Иначе тело удаляем — оно не должно
-        // остаться "брошенным" в мире при перезапуске сервера или потерянном wake().
-        if (this.age > SELF_CLEAN_GRACE_TICKS && this.age % 40 == 0) {
-            Optional<UUID> owner = getOwnerUuid();
-            boolean shouldDiscard;
-            if (owner.isEmpty()) {
-                shouldDiscard = true; // владелец неизвестен (битые NBT) — убираем
-            } else {
-                MinecraftServer server = this.getServer();
-                ServerPlayerEntity player = server != null
-                        ? server.getPlayerManager().getPlayer(owner.get())
-                        : null;
-                // Владелец оффлайн ИЛИ онлайн, но уже не во сне — тело больше не нужно.
-                shouldDiscard = player == null || !DreamManager.isDreaming(owner.get());
-            }
-            if (shouldDiscard) {
-                this.discard();
-            }
-        }
-    }
-
-    // --- Сохранение владельца в NBT: без этого после перезапуска сервера тело бы ---
-    // --- "забыло", чьё оно, и самоочистка сработала бы только по пустому UUID. ---
-
     @Override
     public void writeCustomDataToNbt(NbtCompound nbt) {
         super.writeCustomDataToNbt(nbt);
-        getOwnerUuid().ifPresent(uuid -> nbt.putUuid("OwnerUuid", uuid));
+        getSkinOwner().ifPresent(uuid -> nbt.putUuid("Owner", uuid));
     }
 
     @Override
     public void readCustomDataFromNbt(NbtCompound nbt) {
         super.readCustomDataFromNbt(nbt);
-        if (nbt.containsUuid("OwnerUuid")) {
-            setOwnerUuid(nbt.getUuid("OwnerUuid"));
-        }
+        if (nbt.containsUuid("Owner")) this.dataTracker.set(OWNER, Optional.of(nbt.getUuid("Owner")));
     }
 }

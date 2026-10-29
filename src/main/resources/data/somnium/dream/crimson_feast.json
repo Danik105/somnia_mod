@@ -1,9 +1,10 @@
 {
-  "display_name_key": "somnium.dream.crimson_feast",
-  "structure_template": "somnium:crimson_feast_village",
-  "monster_entity_ids": [],
-  "base_weight": 14,
-  "min_sanity_to_appear": 100,
-  "duration_ticks": 5400,
-  "objective": "Судьи подадут 5 блюд. Свежее блюдо — возьми и съешь (зажми ПКМ). Порченое (зелёное имя и дым) — возьми в левую руку, зажигалку в правую и нажми ПКМ: оно сгорит. В конце возьми Кубок Тоста и выпей его до дна — так ты проснёшься."
+  "name": "somnium.dream.crimson_feast",
+  "objective": "somnium.dream.crimson_feast.objective",
+  "dimension": "somnium:dream_crimson_feast",
+  "scenario": "somnium:crimson_feast",
+  "monsters": [],
+  "weight": 14,
+  "max_sanity": 100,
+  "duration_ticks": 5400
 }

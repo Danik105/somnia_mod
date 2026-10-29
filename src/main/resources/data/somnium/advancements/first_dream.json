@@ -1,8 +1,9 @@
 {
   "display": {
     "icon": {
-      "id": "minecraft:white_bed"
+      "item": "minecraft:white_bed"
     },
+    "background": "minecraft:textures/block/crying_obsidian.png",
     "title": {
       "translate": "advancements.somnium.first_dream.title"
     },

@@ -12,7 +12,7 @@ import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
  * Клиентская часть мода:
  *  - принимает SanitySyncPayload и хранит последнее значение рассудка
  *  - рисует HUD-индикатор рассудка (простая полоса/иконка глаза, "плывущая" при низком рассудке)
- *  - регистрирует рендереры сущностей-кошмаров (пока временная заглушка, см. NightmarePlaceholderRenderer)
+ *  - регистрирует рендереры сущностей (кошмары, спящее тело, отражения со скином игрока)
  */
 public final class SomniumClient implements ClientModInitializer {
 
@@ -51,21 +51,30 @@ public final class SomniumClient implements ClientModInitializer {
         HudRenderCallback.EVENT.register((drawContext, tickCounter) -> {
             SanityHudRenderer.render(drawContext, clientSanity, dreamHudState.active());
             DreamObjectiveHudRenderer.render(drawContext, dreamHudState);
+            HorrorOverlay.render(drawContext);
         });
 
-        // Регистрация рендереров сущностей (API 1.20.1)
+        // Рендереры сущностей. Спящее тело и отражения рисуются скином игрока-владельца.
         EntityRendererRegistry.register(ModEntities.DROWNED_WRETCH, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.LURKING_SHADE, NightmarePlaceholderRenderer::new);
-        EntityRendererRegistry.register(ModEntities.MIRRORED_DOUBLE, NightmarePlaceholderRenderer::new);
+        EntityRendererRegistry.register(ModEntities.MIRRORED_DOUBLE, SkinnedMobRenderer::new);
         EntityRendererRegistry.register(ModEntities.SCREAMING_MINER, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.BLIND_BURROWER, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.FERAL_VILLAGER, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.FLESH_GOLEM, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.WATCHER, NightmarePlaceholderRenderer::new);
         EntityRendererRegistry.register(ModEntities.NIGHTMARE_AMALGAM, NightmarePlaceholderRenderer::new);
-        EntityRendererRegistry.register(ModEntities.PHANTOM_EEL, NightmarePlaceholderRenderer::new);
+        EntityRendererRegistry.register(ModEntities.PHANTOM_EEL, PhantomEelRenderer::new);
         EntityRendererRegistry.register(ModEntities.STALKER, NightmarePlaceholderRenderer::new);
-        EntityRendererRegistry.register(ModEntities.MIRROR_REFLECTION, MirrorReflectionRenderer::new);
+        EntityRendererRegistry.register(ModEntities.MIRROR_REFLECTION, SkinnedMobRenderer::new);
+        EntityRendererRegistry.register(ModEntities.CONTROLLER, NightmarePlaceholderRenderer::new);
+        EntityRendererRegistry.register(ModEntities.PASSENGER, NightmarePlaceholderRenderer::new);
+        EntityRendererRegistry.register(ModEntities.THIN_MAN, ThinManRenderer::new);
+        EntityRendererRegistry.register(ModEntities.CRAWLER, CrawlerRenderer::new);
+        EntityRendererRegistry.register(ModEntities.SMILER, SmilerRenderer::new);
+        EntityRendererRegistry.register(ModEntities.GRASPING_HANDS, GraspingHandsRenderer::new);
+        HorrorOverlay.register();
+        EntityRendererRegistry.register(ModEntities.SLEEPING_BODY, SleepingBodyRenderer::new);
 
         // ДОБАВЛЕНО ("портал в мир снов"): плёнка портала полупрозрачная, как у портала ада
         net.fabricmc.fabric.api.blockrenderlayer.v1.BlockRenderLayerMap.INSTANCE.putBlock(

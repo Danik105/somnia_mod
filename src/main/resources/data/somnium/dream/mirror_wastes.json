@@ -1,9 +1,10 @@
 {
-  "display_name_key": "somnium.dream.mirror_wastes",
-  "structure_template": "somnium:mirror_wastes_procedural",
-  "monster_entity_ids": [],
-  "base_weight": 18,
-  "min_sanity_to_appear": 100,
-  "duration_ticks": 6600,
-  "objective": "Поймай своё отражение. Через полминуты в пустоши появится зеркало — коснись его 3 раза, а оно будет исчезать и блестеть в новых местах. Двойник идёт за тобой по пятам и ускоряется после каждого касания — не дай ему схватить тебя."
+  "name": "somnium.dream.mirror_wastes",
+  "objective": "somnium.dream.mirror_wastes.objective",
+  "dimension": "somnium:dream_mirror_wastes",
+  "scenario": "somnium:mirror_wastes",
+  "monsters": [],
+  "weight": 18,
+  "max_sanity": 100,
+  "duration_ticks": 6600
 }

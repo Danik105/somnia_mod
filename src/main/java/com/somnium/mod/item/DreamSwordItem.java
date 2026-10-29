@@ -11,15 +11,14 @@ import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
 import net.minecraft.world.World;
+import org.jetbrains.annotations.Nullable;
 
 import java.util.List;
 
 /**
- * Меч сноведений.
- * В реальном мире — слабый, "спящий" клинок (4 урона). В любом измерении снов
- * (включая мир снов за порталом) меч ПРОСЫПАЕТСЯ: пока он в руке, владелец
- * получает Силу III (+9 к урону) — итого удар сильнее незеритового меча.
- * Рецепт: 2 слитка сноведений + палка.
+ * Меч Сноведений: наяву "спит" (4 урона), во снах и в мире снов просыпается — Сила II,
+ * пока он в руке. Уходит в сон вместе с игроком (тег somnium:dream_carry) — раньше
+ * все вещи снимались при засыпании, и меч нельзя было использовать там, где он силён.
  */
 public class DreamSwordItem extends SwordItem {
 
@@ -30,23 +29,15 @@ public class DreamSwordItem extends SwordItem {
     @Override
     public void inventoryTick(ItemStack stack, World world, Entity entity, int slot, boolean selected) {
         super.inventoryTick(stack, world, entity, slot, selected);
-        if (world.isClient() || !(entity instanceof ServerPlayerEntity player)) {
-            return;
-        }
-        if (!ModDimensions.isDreamDimension(world.getRegistryKey())) {
-            return; // в реальном мире меч спит
-        }
-        // Меч просыпается: Сила III, пока он в главной руке во сне.
-        // Обновляем раз в секунду, эффект с запасом — не мигает в HUD.
-        if (selected && world.getTime() % 20 == 0) {
-            player.addStatusEffect(new StatusEffectInstance(
-                    StatusEffects.STRENGTH, 45, 2, true, false, true));
+        if (world.isClient() || !selected || !(entity instanceof ServerPlayerEntity player)) return;
+        if (!ModDimensions.isDreamDimension(world.getRegistryKey())) return;
+        if (world.getTime() % 20 == 0) {
+            player.addStatusEffect(new StatusEffectInstance(StatusEffects.STRENGTH, 45, 1, true, false, true));
         }
     }
 
     @Override
-    public void appendTooltip(ItemStack stack, World world, List<Text> tooltip, TooltipContext context) {
-        tooltip.add(Text.translatable("item.somnium.dream_sword.tooltip")
-                .formatted(Formatting.DARK_PURPLE));
+    public void appendTooltip(ItemStack stack, @Nullable World world, List<Text> tooltip, TooltipContext context) {
+        tooltip.add(Text.translatable("item.somnium.dream_sword.tooltip").formatted(Formatting.DARK_PURPLE));
     }
 }

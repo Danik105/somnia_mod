@@ -1,0 +1,10 @@
+{
+  "name": "somnium.dream.cornfield",
+  "objective": "somnium.dream.cornfield.objective",
+  "dimension": "somnium:dream_cornfield",
+  "scenario": "somnium:cornfield",
+  "monsters": [],
+  "weight": 12,
+  "max_sanity": 100,
+  "duration_ticks": 4800
+}

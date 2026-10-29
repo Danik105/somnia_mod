@@ -1,0 +1,12 @@
+{
+  "name": "somnium.dream.library",
+  "objective": "somnium.dream.library.objective",
+  "dimension": "somnium:dream_library",
+  "scenario": "somnium:library",
+  "monsters": [
+    "somnium:lurking_shade"
+  ],
+  "weight": 12,
+  "max_sanity": 100,
+  "duration_ticks": 6000
+}

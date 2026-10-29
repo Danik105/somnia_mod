@@ -1,0 +1,10 @@
+{
+  "name": "somnium.dream.endless_fall",
+  "objective": "somnium.dream.endless_fall.objective",
+  "dimension": "somnium:dream_endless_fall",
+  "scenario": "somnium:endless_fall",
+  "monsters": [],
+  "weight": 10,
+  "max_sanity": 100,
+  "duration_ticks": 3600
+}

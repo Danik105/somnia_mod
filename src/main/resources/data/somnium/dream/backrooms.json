@@ -1,0 +1,13 @@
+{
+  "name": "somnium.dream.backrooms",
+  "objective": "somnium.dream.backrooms.objective",
+  "dimension": "somnium:dream_backrooms",
+  "scenario": "somnium:backrooms",
+  "monsters": [
+    "somnium:smiler",
+    "somnium:crawler"
+  ],
+  "weight": 14,
+  "max_sanity": 100,
+  "duration_ticks": 6000
+}

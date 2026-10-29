@@ -46,23 +46,20 @@ public class ScreamingMinerEntity extends AbstractNightmareEntity {
                     burrower.setTarget(prey);
                 }
 
-                // РЕАЛИЗОВАНО ("обвал"): от крика с потолка над жертвой сыплется гравий —
-                // в шахте кричать опасно. Роняем 3-5 блоков с небольшим разбросом.
-                int clumps = 3 + this.getRandom().nextInt(3);
-                for (int i = 0; i < clumps; i++) {
-                    int dx = this.getRandom().nextInt(5) - 2;
-                    int dz = this.getRandom().nextInt(5) - 2;
-                    // Самая верхняя воздушная полость над жертвой — гравий упадёт сам
-                    for (int dy = 8; dy >= 3; dy--) {
-                        net.minecraft.util.math.BlockPos pos = prey.getBlockPos().add(dx, dy, dz);
-                        if (sw.getBlockState(pos).isAir()) {
-                            sw.setBlockState(pos, net.minecraft.block.Blocks.GRAVEL.getDefaultState());
-                            break;
-                        }
-                    }
-                }
+                // "Обвал": от крика с потолка на жертву сыплются камни — урон и замедление.
+                // Раньше здесь ставился настоящий гравий: в шахте он навсегда забивал
+                // коридоры (во сне блоки не сломать), а в яви засыпал всё вокруг.
+                sw.spawnParticles(new net.minecraft.particle.BlockStateParticleEffect(
+                                net.minecraft.particle.ParticleTypes.FALLING_DUST,
+                                net.minecraft.block.Blocks.GRAVEL.getDefaultState()),
+                        prey.getX(), prey.getY() + 3.0, prey.getZ(), 30, 1.2, 0.3, 1.2, 0.0);
                 sw.spawnParticles(net.minecraft.particle.ParticleTypes.CLOUD,
                         prey.getX(), prey.getY() + 2.5, prey.getZ(), 8, 0.6, 0.4, 0.6, 0.02);
+                sw.playSound(null, prey.getBlockPos(), net.minecraft.sound.SoundEvents.BLOCK_GRAVEL_BREAK,
+                        net.minecraft.sound.SoundCategory.BLOCKS, 1.2f, 0.6f);
+                prey.damage(sw.getDamageSources().fallingBlock(this), 2.0f);
+                prey.addStatusEffect(new net.minecraft.entity.effect.StatusEffectInstance(
+                        net.minecraft.entity.effect.StatusEffects.SLOWNESS, 40, 1));
             }
         }
     }

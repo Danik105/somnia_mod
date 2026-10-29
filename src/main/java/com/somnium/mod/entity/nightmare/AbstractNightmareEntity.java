@@ -1,18 +1,28 @@
 package com.somnium.mod.entity.nightmare;
 
+import com.somnium.mod.dream.DreamManager;
+import com.somnium.mod.registry.ModItems;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.EntityType;
-import net.minecraft.entity.ai.goal.*;
+import net.minecraft.entity.ai.goal.ActiveTargetGoal;
+import net.minecraft.entity.ai.goal.LookAroundGoal;
+import net.minecraft.entity.ai.goal.LookAtEntityGoal;
+import net.minecraft.entity.ai.goal.MeleeAttackGoal;
+import net.minecraft.entity.ai.goal.RevengeGoal;
+import net.minecraft.entity.ai.goal.SwimGoal;
+import net.minecraft.entity.ai.goal.WanderAroundFarGoal;
 import net.minecraft.entity.attribute.DefaultAttributeContainer;
 import net.minecraft.entity.attribute.EntityAttributes;
+import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.item.ItemStack;
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.world.World;
 
 /**
- * Общий предок для всех 6-7 уникальных сущностей-кошмаров.
- * Полностью новые сущности "с нуля" (не наследуют ванильные мобы),
- * но переиспользуют ванильный набор AI-целей как отправную точку —
- * каждый наследник переопределяет initGoals() под свою уникальную механику.
+ * Общий предок монстров-кошмаров: базовый набор ИИ (наследники переопределяют под
+ * свою механику), "грейс" первых 12 секунд сна и дроп Эссенции Кошмара.
  */
 public abstract class AbstractNightmareEntity extends HostileEntity {
 
@@ -20,7 +30,6 @@ public abstract class AbstractNightmareEntity extends HostileEntity {
         super(type, world);
     }
 
-    /** Базовые атрибуты — переопределяются наследниками под конкретного монстра. */
     public static DefaultAttributeContainer.Builder createNightmareAttributes() {
         return HostileEntity.createHostileAttributes()
                 .add(EntityAttributes.GENERIC_MAX_HEALTH, 20.0)
@@ -40,36 +49,22 @@ public abstract class AbstractNightmareEntity extends HostileEntity {
         this.targetSelector.add(2, new ActiveTargetGoal<>(this, PlayerEntity.class, true));
     }
 
-    /**
-     * Все монстры снов родом "не отсюда" — стоят на месте под прямыми солнечными лучами
-     * гораздо хуже ванильных мобов (усиленный лор-эффект), но это переопределяется по вкусу
-     * в конкретных наследниках (например, Наблюдателю (Watcher) свет не важен вовсе).
-     */
+    /** Первые 12 секунд сна кошмары не бьют — игрок должен успеть осмотреться. */
     @Override
-    public boolean isAffectedBySplashPotions() {
-        return true;
+    public boolean tryAttack(Entity target) {
+        if (target instanceof ServerPlayerEntity player && player.getServer() != null
+                && DreamManager.isInDreamEntryGrace(player.getUuid(), player.getServer().getTicks())) {
+            return false;
+        }
+        return super.tryAttack(target);
     }
 
-    /**
-     * ДОБАВЛЕНО ("предметов нет"): раньше NIGHTMARE_ESSENCE негде было получить — не было ни
-     * одного источника этого предмета в игре. Теперь любой монстр-кошмар, убитый игроком, роняет
-     * 1-2 Эссенции Кошмара — основной крафтовый ресурс мода (Ловец Снов, Колокол Пробуждения).
-     * Не роняет ничего при смерти НЕ от игрока (например, от игрового мира), чтобы не плодить
-     * фарм через окружающую среду без риска.
-     */
-    // ПРОВЕРИТЬ ПРИ ПЕРВОЙ СБОРКЕ: сигнатура dropStack(ServerWorld, ItemStack) взята по аналогии
-    // с тем, как в 1.21.x многим методам LivingEntity добавили явный параметр ServerWorld вместо
-    // обращения к полю world напрямую (как и в остальном коде проекта, см. README про getTopY/
-    // player.teleport и т.п.). Если в вашей сборке 26.1 метод называется иначе или принимает
-    // другие аргументы — поправьте по автодополнению IDE/декомпилу.
+    /** Убитый игроком кошмар роняет 1-2 Эссенции Кошмара — основной ресурс мода. */
     @Override
-    public void onDeath(net.minecraft.entity.damage.DamageSource damageSource) {
+    public void onDeath(DamageSource damageSource) {
         super.onDeath(damageSource);
-        if (this.getEntityWorld() instanceof net.minecraft.server.world.ServerWorld serverWorld
-                && damageSource.getAttacker() instanceof PlayerEntity) {
-            int count = 1 + this.getRandom().nextInt(2);
-            this.dropStack(new net.minecraft.item.ItemStack(
-                    com.somnium.mod.registry.ModItems.NIGHTMARE_ESSENCE, count));
+        if (!this.getWorld().isClient() && damageSource.getAttacker() instanceof PlayerEntity) {
+            this.dropStack(new ItemStack(ModItems.NIGHTMARE_ESSENCE, 1 + this.getRandom().nextInt(2)));
         }
     }
 }
